@@ -6,7 +6,6 @@
 python -m http.server 8000
 ```
 
+```browser
+http://localhost:8000/
 ```
-
-```
-
