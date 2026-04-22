@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>উদ্দীপ্ত তরুণ সংঘ</title>
+<link rel="icon" type="image/jpeg" href="logo.jpeg"/>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Hind+Siliguri:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc,
+  deleteDoc, query, orderBy, where, onSnapshot, arrayUnion, arrayRemove,
+  serverTimestamp, increment, Timestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBnCgL4iEgeJrAT2Fla9JaZ3EnOe5JJoPg",
+  authDomain: "uddipto-4d584.firebaseapp.com",
+  projectId: "uddipto-4d584",
+  storageBucket: "uddipto-4d584.firebasestorage.app",
+  messagingSenderId: "512907631953",
+  appId: "1:512907631953:web:3478da28a734fcea680770"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const gp = new GoogleAuthProvider();
+
+let currentUser = null, currentRole = 'user', currentPage = 'recent';
+let unsubPosts = null, allMembers = [], allTags = [];
+let searchQuery = '', searchTag = '', searchMonth = '';
+
+// ── AUTH ──
+window.loginWithGoogle = async () => {
+  try { await signInWithPopup(auth, gp); }
+  catch(e) { toast('Login failed: ' + e.message, 'error'); }
+};
+window.logout = async () => { await signOut(auth); toast('লগআউট হয়েছে'); closeAllModals(); };
+
+onAuthStateChanged(auth, async user => {
+  currentUser = user;
+  if (user) {
+    const snap = await getDoc(doc(db,'users',user.uid));
+    if (!snap.exists()) {
+      await setDoc(doc(db,'users',user.uid), { uid:user.uid, name:user.displayName,
+        email:user.email, photo:user.photoURL, role:'user', createdAt:serverTimestamp(), savedPosts:[] });
+      currentRole = 'user';
+    } else currentRole = snap.data().role || 'user';
+    document.getElementById('loginBtn').style.display = 'none';
+    const pa = document.getElementById('profileArea');
+    pa.style.display = 'flex';
+    pa.querySelector('.pa-img').src = user.photoURL||'';
+    pa.querySelector('.pa-name').textContent = user.displayName?.split(' ')[0]||'';
+  } else {
+    currentRole = 'user';
+    document.getElementById('loginBtn').style.display = 'flex';
+    document.getElementById('profileArea').style.display = 'none';
+  }
+  updatePostBtn(); loadPosts(currentPage);
+});
+
+function updatePostBtn() {
+  const b = document.getElementById('newPostBtn');
+  if (b) b.style.display = canPost() ? 'flex' : 'none';
+}
+function canPost() { return ['maintainer','admin','worker'].includes(currentRole); }
+function canDelete(p) { return currentUser && (currentRole==='maintainer'||currentRole==='admin'||(currentRole==='worker'&&p.authorId===currentUser.uid)); }
+
+// ── TAGS ──
+async function loadTags() {
+  const snap = await getDocs(collection(db,'tags'));
+  allTags = snap.docs.map(d => d.data().name).filter(Boolean);
+}
+async function saveTag(name) {
+  const clean = name.trim().toLowerCase().replace(/\s+/g,'-');
+  if (!clean || allTags.includes(clean)) return clean;
+  await setDoc(doc(db,'tags',clean), { name:clean, createdBy:currentUser.uid, createdAt:serverTimestamp() });
+  allTags.push(clean);
+  return clean;
+}
+
+// ── LOAD POSTS ──
+window.loadPosts = (page = currentPage) => {
+  currentPage = page;
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
+  const titleMap = { recent:'সাম্প্রতিক · This Month', blog:'ব্লগ · Blogs', guideline:'নির্দেশিকা · Guidelines' };
+  const st = document.getElementById('sectionTitle');
+  if (st) st.textContent = titleMap[page]||'Posts';
+
+  // Toggle filter bar — hidden on recent, visible on blog/guideline
+  const fb = document.querySelector('.filter-bar');
+  if (fb) fb.classList.toggle('fb-hidden', page === 'recent');
+
+  // Clear month filter when switching to recent (it auto-filters by current month)
+  if (page === 'recent') {
+    searchMonth = '';
+    const mf = document.getElementById('monthFilter');
+    if (mf) mf.value = '';
+  }
+
+  const grid = document.getElementById('postsGrid');
+  grid.innerHTML = Array(6).fill('<div class="shimmer"></div>').join('');
+  if (unsubPosts) unsubPosts();
+  unsubPosts = onSnapshot(query(collection(db,'posts'), orderBy('createdAt','desc')), snap => {
+    let posts = snap.docs.map(d => ({id:d.id,...d.data()}));
+    const now = new Date();
+    if (page==='recent') {
+      posts = posts.filter(p => {
+        if (!p.createdAt) return false;
+        const d = p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+        return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear();
+      });
+    } else {
+      posts = posts.filter(p => p.type === page);
+    }
+    // Search filters
+    if (searchQuery) posts = posts.filter(p => (p.title||'').toLowerCase().includes(searchQuery)||(p.body||'').toLowerCase().includes(searchQuery)||(p.authorName||'').toLowerCase().includes(searchQuery));
+    if (searchTag) posts = posts.filter(p => (p.tags||[]).includes(searchTag));
+    if (searchMonth) posts = posts.filter(p => {
+      if (!p.createdAt) return false;
+      const d = p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` === searchMonth;
+    });
+    renderPosts(posts);
+  });
+};
+
+function tAgo(ts) {
+  if (!ts) return '';
+  const d = ts.toDate?ts.toDate():new Date(ts), s=(Date.now()-d)/1000;
+  if(s<60) return 'এইমাত্র';
+  if(s<3600) return Math.floor(s/60)+'m আগে';
+  if(s<86400) return Math.floor(s/3600)+'h আগে';
+  return d.toLocaleDateString('bn-BD',{day:'numeric',month:'short'});
+}
+function readTime(body) {
+  const words = (body||'').split(/\s+/).length;
+  return Math.max(1,Math.ceil(words/200)) + ' MIN READ';
+}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function renderPosts(posts) {
+  const grid = document.getElementById('postsGrid');
+  if (!posts.length) {
+    grid.innerHTML = `<div class="empty"><div style="font-size:2rem;margin-bottom:.5rem">☽</div><p>কোনো পোস্ট নেই।</p></div>`;
+    return;
+  }
+  grid.innerHTML = posts.map(cardHtml).join('');
+}
+
+function cardHtml(p) {
+  const liked = currentUser&&(p.likes||[]).includes(currentUser.uid);
+  const saved = currentUser&&(p.savedBy||[]).includes(currentUser.uid);
+  const allImgs = [p.imageUrl,...(p.images||[])].filter(Boolean);
+  const hasText = !!(p.body||'').trim();
+  const hasImgs = allImgs.length > 0;
+  const tagsHtml = (p.tags||[]).map(t=>`<span class="post-tag" onclick="event.stopPropagation();filterByTag('${esc(t)}')">#${esc(t)}</span>`).join('');
+
+  // Image layout: 1=full, 2=big+small, 3+=big+small+blur/count
+  let imgBlock = '';
+  if (hasImgs) {
+    if (allImgs.length === 1) {
+      imgBlock = `<div class="card-img-wrap ci-single" onclick="openPost('${p.id}')">
+        <div class="ci-full" style="background-image:url('${esc(allImgs[0])}')"></div>
+      </div>`;
+    } else if (allImgs.length === 2) {
+      // Two images: big left + full-height right — no fake blurred 3rd panel
+      imgBlock = `<div class="card-img-wrap" onclick="openPost('${p.id}')">
+        <div class="ci-main" style="background-image:url('${esc(allImgs[0])}')"></div>
+        <div class="ci-side">
+          <div class="ci-s1 ci-s1-full" style="background-image:url('${esc(allImgs[1])}')"></div>
+        </div>
+      </div>`;
+    } else {
+      // 3+ images: big left + top-right + bottom-right (with count if >3)
+      const extra = allImgs.length - 3;
+      const ci_s2_overlay = extra > 0 ? `<div class="ci-overlay">+${extra}</div>` : '';
+      imgBlock = `<div class="card-img-wrap" onclick="openPost('${p.id}')">
+        <div class="ci-main" style="background-image:url('${esc(allImgs[0])}')"></div>
+        <div class="ci-side">
+          <div class="ci-s1" style="background-image:url('${esc(allImgs[1])}')"></div>
+          <div class="ci-s2" style="background-image:url('${esc(allImgs[2])}')">
+            ${ci_s2_overlay}
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+
+  const typeLabel = {blog:'ব্লগ',guideline:'নির্দেশিকা'}[p.type]||'ব্লগ';
+
+  return `<div class="card" onclick="openPost('${p.id}')">
+    <div class="card-inner">
+      <div class="card-meta-row">
+        <div class="card-author-row">
+          <img src="${esc(p.authorPhoto||'')}" class="card-av" onerror="this.style.display='none'"/>
+          <span class="card-author">${esc(p.authorName||'')}</span>
+        </div>
+        <span class="card-type-badge ct-${p.type||'blog'}">${typeLabel}</span>
+      </div>
+      <h3 class="card-title">${esc(p.title||'')}</h3>
+      ${hasText?`<p class="card-excerpt">${esc((p.body||'').slice(0,120))}${(p.body||'').length>120?'…':''}</p>`:''}
+      ${tagsHtml?`<div class="card-tags">${tagsHtml}</div>`:''}
+    </div>
+    ${imgBlock}
+    <div class="card-footer-row">
+      <span class="card-date">📅 ${tAgo(p.createdAt)}</span>
+      <span class="card-readtime">👁 ${readTime(p.body)}</span>
+    </div>
+    <div class="cact" onclick="event.stopPropagation()">
+      <button class="ca ${liked?'cal':''}" onclick="toggleLike('${p.id}',this)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        like${p.likeCount?' '+p.likeCount:''}
+      </button>
+      <button class="ca" onclick="openComments('${p.id}')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        comment${p.commentCount?' '+p.commentCount:''}
+      </button>
+      <button class="ca ${saved?'cas':''}" onclick="toggleSave('${p.id}',this)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        save
+      </button>
+      ${canDelete(p)?`<button class="ca ca-del" onclick="deletePost('${p.id}')">✕</button>`:''}
+    </div>
+  </div>`;
+}
+
+// ── OPEN POST (full view) ──
+window.openPost = async (id) => {
+  const snap = await getDoc(doc(db,'posts',id));
+  if (!snap.exists()) return;
+  const p = {id,...snap.data()};
+  await updateDoc(doc(db,'posts',id),{viewCount:increment(1)});
+  const liked = currentUser&&(p.likes||[]).includes(currentUser.uid);
+  const saved = currentUser&&(p.savedBy||[]).includes(currentUser.uid);
+  const allImgs = [p.imageUrl,...(p.images||[])].filter(Boolean);
+  const typeLabel = {blog:'ব্লগ',guideline:'নির্দেশিকা'}[p.type]||'ব্লগ';
+  const tagsHtml = (p.tags||[]).map(t=>`<span class="post-tag" onclick="filterByTag('${esc(t)}')">#${esc(t)}</span>`).join('');
+
+  // Store images globally so lightbox onclick can use index only (avoids JSON-in-HTML-attr issue)
+  window._postImgs = allImgs;
+  let imgHtml = '';
+  if (allImgs.length===1) {
+    imgHtml = `<div class="pm-img-single" onclick="openLightbox(0)" style="background-image:url('${esc(allImgs[0])}')"><div class="pm-img-hover"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`;
+  } else if (allImgs.length>1) {
+    imgHtml = `<div class="pm-gallery">${allImgs.map((u,i)=>`<div class="pm-gimg" style="background-image:url('${esc(u)}')" onclick="openLightbox(${i})"><div class="pm-gimg-hover"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`).join('')}</div>`;
+  }
+
+  document.getElementById('postModal').innerHTML = `
+    <div class="mo" onclick="closeModal('postModal')"></div>
+    <div class="mb pmb">
+      <button class="mcl" onclick="closeModal('postModal')">✕</button>
+      <div class="pm-bd">
+        <div class="pm-meta">
+          <span class="card-type-badge ct-${p.type||'blog'}">${typeLabel}</span>
+          <span>${tAgo(p.createdAt)}</span><span>👁 ${(p.viewCount||0)+1}</span>
+        </div>
+        <h2 class="pm-title">${esc(p.title||'')}</h2>
+        <div class="pm-auth">
+          <img src="${esc(p.authorPhoto||'')}" onerror="this.style.display='none'"/>
+          <span>${esc(p.authorName||'')}</span>
+          <span class="pm-rb">${p.authorRole||'user'}</span>
+        </div>
+        ${p.body?`<div class="pm-txt">${esc(p.body).replace(/\n/g,'<br/>')}</div>`:''}
+        ${tagsHtml?`<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>`:''}
+        ${imgHtml}
+        <div class="pm-acts">
+          <button class="pill ${liked?'pla':''}" onclick="toggleLike('${id}',this)">♥ Like ${p.likeCount||0}</button>
+          <button class="pill ${saved?'psa':''}" onclick="toggleSave('${id}',this)">⊿ Save</button>
+        </div>
+        <div class="cmw">
+          <h4>মন্তব্য · Comments</h4>
+          <div id="cmList"></div>
+          ${currentUser
+            ?`<div class="cmf"><img src="${esc(currentUser.photoURL||'')}" onerror="this.style.display='none'"/>
+               <input id="cmIn" placeholder="মন্তব্য লিখুন…" onkeydown="if(event.key==='Enter')postComment('${id}')"/>
+               <button onclick="postComment('${id}')">Post</button></div>`
+            :'<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>'}
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('postModal').style.display = 'flex';
+  loadComments(id);
+};
+
+// ── FLOATING COMMENT BOX ──
+window.openComments = async (id) => {
+  const snap = await getDoc(doc(db,'posts',id));
+  if (!snap.exists()) return;
+  const p = snap.data();
+  const box = document.getElementById('commentBox');
+  box.innerHTML = `
+    <div class="cb-header">
+      <span>💬 ${esc(p.title||'Comments')}</span>
+      <button onclick="document.getElementById('commentBox').style.display='none'">✕</button>
+    </div>
+    <div class="cb-list" id="cbList"></div>
+    ${currentUser
+      ?`<div class="cb-form">
+          <img src="${esc(currentUser.photoURL||'')}" onerror="this.style.display='none'"/>
+          <input id="cbInput" placeholder="মন্তব্য লিখুন…" onkeydown="if(event.key==='Enter')cbPostComment('${id}')"/>
+          <button onclick="cbPostComment('${id}')">→</button>
+        </div>`
+      :'<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>'}`;
+  box.style.display = 'flex';
+  onSnapshot(query(collection(db,'posts',id,'comments'), orderBy('createdAt','asc')), snap => {
+    const list = document.getElementById('cbList');
+    if (!list) return;
+    if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
+    list.innerHTML = snap.docs.map(d => {
+      const c = d.data(); const cid = d.id;
+      const replyTo = c.replyTo ? `<span class="reply-ref">↩ ${esc(c.replyTo)}</span>` : '';
+      return `<div class="cmi" id="cmi-${cid}">
+        <img src="${esc(c.authorPhoto||'')}" onerror="this.style.display='none'"/>
+        <div style="width:100%">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span><strong>${esc(c.authorName||'')}</strong><span class="cmt"> ${tAgo(c.createdAt)}</span></span>
+            ${currentUser?`<button class="reply-btn" onclick="cbSetReply('${esc(c.authorName||'')}')">↩</button>`:''}
+          </div>
+          ${replyTo}<p>${esc(c.text||'')}</p>
+        </div></div>`;
+    }).join('');
+    list.scrollTop = list.scrollHeight;
+  });
+};
+
+let _cbReplyTo = '';
+window.cbSetReply = (name) => {
+  _cbReplyTo = name;
+  const inp = document.getElementById('cbInput');
+  if (inp) { inp.placeholder = 'রিপ্লাই লিখুন…'; inp.focus(); }
+  const form = document.querySelector('.cb-form');
+  if (form) {
+    let chip = form.querySelector('.reply-chip');
+    if (!chip) { chip = document.createElement('div'); chip.className='reply-chip'; form.parentNode.insertBefore(chip, form); }
+    chip.innerHTML = `<span>↩ <strong>${name}</strong> কে রিপ্লাই</span><button onclick="cbCancelReply()">✕</button>`;
+  }
+};
+window.cbCancelReply = () => {
+  _cbReplyTo = '';
+  const chip = document.querySelector('.cb-form')?.previousElementSibling;
+  if (chip?.classList.contains('reply-chip')) chip.remove();
+  const inp = document.getElementById('cbInput');
+  if (inp) { inp.placeholder = 'মন্তব্য লিখুন…'; inp.value = ''; inp.focus(); }
+};
+window.cbPostComment = async (pid) => {
+  if (!currentUser) { toast('লগইন করুন', 'error'); return; }
+  const inp = document.getElementById('cbInput');
+  const txt = inp?.value?.trim(); if (!txt) return;
+  const replyTo = _cbReplyTo; cbCancelReply();
+  await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
+    authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
+    replyTo: replyTo||null, createdAt:serverTimestamp() });
+  await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+};
+
+window.loadComments = pid => {
+  const list = document.getElementById('cmList'); if (!list) return;
+  onSnapshot(query(collection(db,'posts',pid,'comments'), orderBy('createdAt','asc')), snap => {
+    if (!document.getElementById('cmList')) return;
+    if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
+    list.innerHTML = snap.docs.map(d => {
+      const c = d.data(); const cid = d.id;
+      const replyTo = c.replyTo ? `<span class="reply-ref">↩ ${esc(c.replyTo)}</span>` : '';
+      return `<div class="cmi" id="cmi-${cid}">
+        <img src="${esc(c.authorPhoto||'')}" onerror="this.style.display='none'"/>
+        <div style="width:100%">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span><strong>${esc(c.authorName||'')}</strong><span class="cmt"> ${tAgo(c.createdAt)}</span></span>
+            ${currentUser?`<button class="reply-btn" onclick="cmSetReply('${esc(c.authorName||'')}')">↩</button>`:''}
+          </div>
+          ${replyTo}<p>${esc(c.text||'')}</p>
+        </div></div>`;
+    }).join('');
+  });
+};
+
+let _cmReplyTo = '';
+window.cmSetReply = (name) => {
+  _cmReplyTo = name;
+  const inp = document.getElementById('cmIn');
+  if (inp) { inp.placeholder = 'রিপ্লাই লিখুন…'; inp.focus(); }
+  const form = document.querySelector('.cmf');
+  if (form) {
+    let chip = form.querySelector('.reply-chip');
+    if (!chip) { chip = document.createElement('div'); chip.className='reply-chip'; form.parentNode.insertBefore(chip, form); }
+    chip.innerHTML = `<span>↩ <strong>${name}</strong> কে রিপ্লাই</span><button onclick="cmCancelReply()">✕</button>`;
+  }
+};
+window.cmCancelReply = () => {
+  _cmReplyTo = '';
+  const form = document.querySelector('.cmf');
+  const chip = form?.previousElementSibling;
+  if (chip?.classList.contains('reply-chip')) chip.remove();
+  const inp = document.getElementById('cmIn');
+  if (inp) { inp.placeholder = 'মন্তব্য লিখুন…'; inp.value = ''; inp.focus(); }
+};
+window.postComment = async pid => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  const inp = document.getElementById('cmIn');
+  const txt = inp?.value?.trim(); if (!txt) return;
+  const replyTo = _cmReplyTo; cmCancelReply();
+  await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
+    authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
+    replyTo: replyTo||null, createdAt:serverTimestamp() });
+  await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+};
+
+// ── LIKES & SAVES ──
+window.toggleLike = async (id,btn) => {
+  if (!currentUser) { toast('লাইক দিতে লগইন করুন','error'); return; }
+  const r = doc(db,'posts',id), s = await getDoc(r);
+  const liked = (s.data()?.likes||[]).includes(currentUser.uid);
+  await updateDoc(r, { likes:liked?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid), likeCount:increment(liked?-1:1) });
+  btn?.classList.toggle('cal',!liked); btn?.classList.toggle('pla',!liked);
+};
+window.toggleSave = async (id,btn) => {
+  if (!currentUser) { toast('সেভ করতে লগইন করুন','error'); return; }
+  const pr=doc(db,'posts',id), ur=doc(db,'users',currentUser.uid), s=await getDoc(pr);
+  const saved=(s.data()?.savedBy||[]).includes(currentUser.uid);
+  await updateDoc(pr,{savedBy:saved?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid)});
+  await updateDoc(ur,{savedPosts:saved?arrayRemove(id):arrayUnion(id)});
+  btn?.classList.toggle('cas',!saved); btn?.classList.toggle('psa',!saved);
+  toast(saved?'সেভ সরানো হয়েছে':'সেভ হয়েছে! ✓');
+};
+window.deletePost = async id => {
+  if (!confirm('এই পোস্ট মুছে দেবেন?')) return;
+  await deleteDoc(doc(db,'posts',id)); toast('পোস্ট মুছে গেছে');
+};
+
+// ── SEARCH ──
+window.handleSearch = e => { if (e.key==='Enter' || e.type==='click') { searchQuery=document.getElementById('searchInput').value.trim().toLowerCase(); loadPosts(currentPage); } };
+window.filterByTag = tag => { searchTag = searchTag===tag?'':tag; document.getElementById('tagFilter').value=searchTag; loadPosts(currentPage); };
+window.applyFilters = () => {
+  searchQuery = document.getElementById('searchInput').value.trim().toLowerCase();
+  searchTag = document.getElementById('tagFilter').value.trim().toLowerCase();
+  searchMonth = document.getElementById('monthFilter').value;
+  loadPosts(currentPage);
+};
+window.clearFilters = () => {
+  searchQuery=''; searchTag=''; searchMonth='';
+  document.getElementById('searchInput').value='';
+  document.getElementById('tagFilter').value='';
+  document.getElementById('monthFilter').value='';
+  loadPosts(currentPage);
+};
+
+// ── CREATE POST ──
+window.openCreatePost = () => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  loadTags(); document.getElementById('createModal').style.display='flex';
+};
+
+// Tag input with autocomplete
+window.handleTagInput = async e => {
+  const val = e.target.value;
+  const lastHash = val.lastIndexOf('#');
+  if (lastHash === -1) { document.getElementById('tagSuggest').innerHTML=''; return; }
+  const partial = val.slice(lastHash+1).toLowerCase();
+  if (!partial) { document.getElementById('tagSuggest').innerHTML=''; return; }
+  await loadTags();
+  const matches = allTags.filter(t=>t.includes(partial)).slice(0,5);
+  const box = document.getElementById('tagSuggest');
+  box.innerHTML = matches.map(t=>`<div class="tag-sug" onclick="insertTag('${t}')">#${t}</div>`).join('');
+};
+window.insertTag = t => {
+  const inp = document.getElementById('tagInput');
+  const val = inp.value, lastHash = val.lastIndexOf('#');
+  inp.value = val.slice(0,lastHash+1) + t + ' ';
+  document.getElementById('tagSuggest').innerHTML='';
+  inp.focus();
+};
+function parseTags(str) {
+  return (str.match(/#[\w\u0980-\u09FF]+/g)||[]).map(t=>t.slice(1).toLowerCase()).slice(0,5);
+}
+
+window.submitPost = async () => {
+  if (!currentUser) return;
+  const title = document.getElementById('ptitle').value.trim();
+  const body = document.getElementById('pbody').value.trim();
+  const type = document.getElementById('ptype').value;
+  const tagStr = document.getElementById('tagInput').value;
+  const imgFiles = [...document.getElementById('pimg').files].slice(0,5);
+  const dateVal = document.getElementById('pdate').value;
+  if (!title) { toast('শিরোনাম দিন','error'); return; }
+  const btn = document.getElementById('submitBtn');
+  btn.disabled=true; btn.textContent='প্রকাশ হচ্ছে…';
+  const createdAt = dateVal ? Timestamp.fromDate(new Date(dateVal)) : serverTimestamp();
+  const tags = await Promise.all(parseTags(tagStr).map(saveTag));
+  const uploadImg = async file => {
+    try {
+      const fd=new FormData(); fd.append('image',file);
+      const res=await fetch('https://api.imgur.com/3/image',{method:'POST',headers:{Authorization:'Client-ID 546c25a59c58ad7'},body:fd});
+      const d=await res.json(); return d.success?d.data.link:'';
+    } catch(e){return'';}
+  };
+  const urls = imgFiles.length ? (await Promise.all(imgFiles.map(uploadImg))).filter(Boolean) : [];
+  await addDoc(collection(db,'posts'),{
+    title, body, type, tags, imageUrl:urls[0]||'', images:urls.slice(1),
+    authorId:currentUser.uid, authorName:currentUser.displayName,
+    authorPhoto:currentUser.photoURL, authorRole:currentRole,
+    createdAt, likeCount:0, commentCount:0, viewCount:0, likes:[], savedBy:[]
+  });
+  btn.disabled=false; btn.textContent='প্রকাশ করুন';
+  closeModal('createModal');
+  ['ptitle','pbody','tagInput','pdate'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('pimg').value='';
+  document.getElementById('imgPrev').innerHTML='';
+  document.getElementById('tagSuggest').innerHTML='';
+  toast('প্রকাশিত হয়েছে! بارك الله فيك');
+};
+
+window.prevImgs = inp => {
+  const prev = document.getElementById('imgPrev'); prev.innerHTML='';
+  [...inp.files].slice(0,5).forEach(file => {
+    const r=new FileReader(); r.onload=e=>{
+      const d=document.createElement('div');
+      d.style.cssText=`width:64px;height:64px;border-radius:7px;background:url('${e.target.result}') center/cover;border:1px solid rgba(255,255,255,.1);flex-shrink:0;`;
+      prev.appendChild(d);
+    }; r.readAsDataURL(file);
+  });
+};
+
+// ── PROFILE ──
+window.openProfile = async () => {
+  if (!currentUser) return;
+  const snap = await getDoc(doc(db,'users',currentUser.uid));
+  const ud = snap.data()||{};
+  const role = ud.role||'user';
+  const rc = {maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+  let savedHtml = '<p class="cmt-h">কোনো সেভ করা পোস্ট নেই</p>';
+  if (ud.savedPosts?.length) {
+    const snaps = await Promise.all(ud.savedPosts.slice(0,8).map(id=>getDoc(doc(db,'posts',id))));
+    const rows = snaps.filter(s=>s.exists()).map(s=>`<div class="spr" onclick="closeModal('profileModal');openPost('${s.id}')">
+      <span>${esc(s.data().title||'Untitled')}</span><span class="spd">${tAgo(s.data().createdAt)}</span></div>`).join('');
+    savedHtml = rows||'<p class="cmt-h">কোনো সেভ করা পোস্ট নেই</p>';
+  }
+  const canManage = role==='maintainer'||role==='admin';
+  document.getElementById('profileModal').innerHTML=`
+    <div class="mo" onclick="closeModal('profileModal')"></div>
+    <div class="mb profmb">
+      <button class="mcl" onclick="closeModal('profileModal')">✕</button>
+      <div class="ph">
+        <img src="${esc(currentUser.photoURL||'')}" class="pav" onerror="this.style.display='none'"/>
+        <div><h2>${esc(currentUser.displayName||'')}</h2>
+        <p>${esc(currentUser.email||'')}</p>
+        <span class="role-badge" style="background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}50">${role}</span></div>
+      </div>
+      <div class="ptabs">
+        <button class="ptab active" onclick="swTab(this,'ts')">💾 সেভ</button>
+        ${canManage?`<button class="ptab" onclick="swTab(this,'tm')">👥 সদস্য</button>`:''}
+        <button class="ptab" onclick="swTab(this,'tset')">⚙️ সেটিংস</button>
+      </div>
+      <div id="ts" class="tc active"><p class="tab-lbl">সেভ করা পোস্ট</p>${savedHtml}</div>
+      ${canManage?`<div id="tm" class="tc">
+        <div class="mbh"><p class="tab-lbl">সদস্য পরিচালনা</p>
+        <input id="msrch" placeholder="নাম বা ইমেইল খুঁজুন…" oninput="filterM(this.value)"/></div>
+        <div class="rfrow">
+          <button class="rf active" onclick="filterR(this,'all')">সব</button>
+          <button class="rf" onclick="filterR(this,'maintainer')">Maintainer</button>
+          <button class="rf" onclick="filterR(this,'admin')">Admin</button>
+          <button class="rf" onclick="filterR(this,'worker')">Worker</button>
+          <button class="rf" onclick="filterR(this,'user')">User</button>
+        </div>
+        <div id="mlist"><p class="cmt-h">লোড হচ্ছে…</p></div>
+      </div>`:''}
+      <div id="tset" class="tc">
+        <p class="tab-lbl">অ্যাকাউন্ট</p>
+        <div class="sirows">
+          <div class="sir"><label>নাম</label><span>${esc(currentUser.displayName||'')}</span></div>
+          <div class="sir"><label>ইমেইল</label><span>${esc(currentUser.email||'')}</span></div>
+          <div class="sir"><label>ভূমিকা</label><span>${role}</span></div>
+          <div class="sir"><label>যোগ দিয়েছেন</label><span>${ud.createdAt?new Date(ud.createdAt.toDate()).toLocaleDateString('bn-BD'):'N/A'}</span></div>
+        </div>
+        <button class="danger-btn" onclick="logout()">সাইন আউট</button>
+      </div>
+    </div>`;
+  document.getElementById('profileModal').style.display='flex';
+  if (canManage) loadMembers();
+};
+
+window.swTab=(btn,id)=>{
+  document.querySelectorAll('.ptab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active'); document.getElementById(id)?.classList.add('active');
+};
+window.loadMembers = async () => {
+  const snap=await getDocs(collection(db,'users'));
+  allMembers=snap.docs.map(d=>d.data()); renderMembers(allMembers);
+};
+window.renderMembers = members => {
+  const list=document.getElementById('mlist'); if(!list)return;
+  const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+  const canP=currentRole==='maintainer', canA=canP||currentRole==='admin';
+  list.innerHTML=`<div class="mstats">
+    <div class="msc">মোট <strong>${allMembers.length}</strong></div>
+    ${['maintainer','admin','worker','user'].map(r=>`<div class="msc">${r} <strong>${allMembers.filter(m=>m.role===r).length}</strong></div>`).join('')}
+  </div>`+members.map(m=>{
+    const ini=(m.name||'?').split(' ').map(c=>c[0]).join('').toUpperCase().slice(0,2);
+    const roles=canP?['maintainer','admin','worker','user']:canA?['admin','worker','user']:[];
+    return`<div class="mrow">
+      <div class="mav" style="background:${rc[m.role||'user']}25;color:${rc[m.role||'user']}">${ini}</div>
+      <div class="minf"><strong>${esc(m.name||'')}${m.uid===currentUser?.uid?' <span class="you">আপনি</span>':''}</strong><small>${esc(m.email||'')}</small></div>
+      <span class="role-badge" style="background:${rc[m.role||'user']}20;color:${rc[m.role||'user']};border:1px solid ${rc[m.role||'user']}40">${m.role||'user'}</span>
+      ${roles.length&&m.uid!==currentUser?.uid?`<div class="rbtns">${roles.map(r=>`<button class="rb ${r} ${m.role===r?'rba':''}" onclick="setRole('${m.uid}','${r}',this)">${r}</button>`).join('')}</div>`:''}
+    </div>`;
+  }).join('');
+};
+window.filterM=v=>renderMembers(allMembers.filter(m=>(m.name||'').toLowerCase().includes(v.toLowerCase())||(m.email||'').toLowerCase().includes(v.toLowerCase())));
+window.filterR=(btn,role)=>{document.querySelectorAll('.rf').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMembers(role==='all'?allMembers:allMembers.filter(m=>m.role===role));};
+window.setRole=async(uid,role,btn)=>{
+  await updateDoc(doc(db,'users',uid),{role});
+  const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+  const row=btn.closest('.mrow');
+  row.querySelectorAll('.rb').forEach(b=>b.classList.remove('rba'));btn.classList.add('rba');
+  const badge=row.querySelector('.role-badge');
+  badge.textContent=role; badge.style.cssText=`background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}40`;
+  allMembers=allMembers.map(m=>m.uid===uid?{...m,role}:m); toast(`ভূমিকা → ${role}`);
+};
+
+// ── UTILS ──
+window.closeModal=id=>{document.getElementById(id).style.display='none';};
+window.closeAllModals=()=>['postModal','createModal','profileModal'].forEach(id=>document.getElementById(id).style.display='none');
+window.toast=(msg,type='success')=>{
+  const t=document.getElementById('toast');t.textContent=msg;
+  t.className='toast show '+type;setTimeout(()=>t.classList.remove('show'),3000);
+};
+window.addEventListener('load',()=>loadPosts('recent'));
+
+// LIGHTBOX
+let _lbImgs = [], _lbIdx = 0;
+window.openLightbox = (idx) => {
+  _lbImgs = window._postImgs || [];
+  _lbIdx = idx || 0;
+  renderLightbox();
+  document.getElementById('lightbox').style.display = 'flex';
+};
+function renderLightbox() {
+  const lb = document.getElementById('lightbox');
+  const total = _lbImgs.length;
+  lb.querySelector('.lb-img').style.backgroundImage = "url('" + _lbImgs[_lbIdx] + "')";
+  lb.querySelector('.lb-counter').textContent = total > 1 ? (_lbIdx+1) + ' / ' + total : '';
+  lb.querySelector('.lb-prev').style.display = total > 1 ? 'flex' : 'none';
+  lb.querySelector('.lb-next').style.display = total > 1 ? 'flex' : 'none';
+}
+window.lbPrev = () => { _lbIdx = (_lbIdx - 1 + _lbImgs.length) % _lbImgs.length; renderLightbox(); };
+window.lbNext = () => { _lbIdx = (_lbIdx + 1) % _lbImgs.length; renderLightbox(); };
+window.closeLightbox = () => { document.getElementById('lightbox').style.display = 'none'; };
+document.addEventListener('keydown', e => {
+  const lb = document.getElementById('lightbox');
+  if (lb && lb.style.display === 'flex') {
+    if (e.key === 'ArrowLeft') lbPrev();
+    else if (e.key === 'ArrowRight') lbNext();
+    else if (e.key === 'Escape') closeLightbox();
+  }
+});
+</script>
+
+<style>
+:root{
+  --olive:#6b8c3a;--olive2:#85ab46;--olive3:#a8cc5a;
+  --sky:#3a8fc4;--sky2:#5aaee0;--sky3:#7fcbf5;
+  --navy:#0d1a3a;--navy2:#152850;--navy3:#1e3a6e;
+  --orange:#e07820;--orange2:#f59030;--orange3:#fdb055;
+  --red:#c0392b;
+  --bg:#0f1a10;--bg2:#141f15;--bg3:#1c2b1e;
+  --card:#172019;--brd:#2a3d2c;--txt:#eef3e8;--txt2:#8fa882;
+  --sh:0 4px 24px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Hind Siliguri',sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;}
+::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-track{background:var(--bg2);}::-webkit-scrollbar-thumb{background:var(--olive2);border-radius:3px;}
+
+/* NAV */
+nav{background:var(--navy);border-bottom:2px solid var(--navy3);height:56px;padding:0 1.2rem;display:flex;align-items:center;gap:.3rem;position:sticky;top:0;z-index:200;}
+.nav-logo{display:flex;align-items:center;gap:.35rem;text-decoration:none;margin-right:.2rem;flex-shrink:0;}
+.nav-logo img{height:40px;width:40px;object-fit:contain;border-radius:8px;}
+.nav-logo-text strong{font-family:'Amiri',serif;font-size:1rem;background:linear-gradient(90deg,var(--olive3),var(--sky3),var(--orange3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-weight:700;display:block;}
+.nav-logo-text em{font-style:normal;color:var(--sky3);font-size:.52rem;letter-spacing:2px;font-family:'IBM Plex Mono',monospace;}
+.nav-tab{background:none;border:none;color:rgba(255,255,255,.6);padding:.35rem .7rem;border-radius:7px;cursor:pointer;font-size:.83rem;font-family:inherit;font-weight:500;transition:all .17s;flex-shrink:0;}
+.nav-tab:hover{background:rgba(255,255,255,.08);color:#fff;}
+.nav-tab.active{background:rgba(168,204,90,.15);color:var(--olive3);border-bottom:2px solid var(--olive3);}
+.nav-sp{flex:1;}
+.srch-wrap{display:flex;align-items:center;gap:.4rem;}
+.srch{display:flex;align-items:center;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:7px;padding:.3rem .6rem;gap:.3rem;}
+.srch input{background:none;border:none;outline:none;color:#fff;font-size:.8rem;width:120px;font-family:inherit;}
+.srch input::placeholder{color:rgba(255,255,255,.35);}
+.srch-btn{background:var(--olive);border:none;color:#fff;border-radius:6px;padding:.28rem .6rem;cursor:pointer;font-size:.75rem;font-family:inherit;}
+#loginBtn{background:var(--olive);color:#fff;border:none;padding:.33rem .8rem;border-radius:7px;cursor:pointer;font-size:.8rem;font-family:inherit;display:flex;align-items:center;gap:.3rem;flex-shrink:0;}
+#loginBtn:hover{background:var(--olive2);}
+#profileArea{display:none;align-items:center;gap:.35rem;flex-shrink:0;}
+.pa-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:7px;padding:.27rem .5rem;cursor:pointer;color:#fff;font-size:.78rem;font-family:inherit;display:flex;align-items:center;gap:.3rem;}
+.pa-img{width:24px;height:24px;border-radius:50%;object-fit:cover;border:2px solid var(--olive3);}
+.pa-name{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#newPostBtn{background:var(--orange);color:#fff;border:none;padding:.33rem .75rem;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:600;display:none;align-items:center;gap:.25rem;font-family:inherit;white-space:nowrap;}
+#newPostBtn:hover{background:var(--orange2);}
+
+/* HERO */
+.hero{background:linear-gradient(160deg,var(--navy) 0%,#0d2a18 50%,var(--navy) 100%);padding:2.5rem 2rem;text-align:center;border-bottom:2px solid var(--navy3);position:relative;overflow:hidden;}
+.hero::before{content:'';position:absolute;inset:0;background-image:radial-gradient(rgba(107,140,58,.1) 1px,transparent 1px);background-size:28px 28px;}
+.hero-logo{display:block;width:80px;height:80px;object-fit:contain;margin:0 auto .7rem;border-radius:14px;position:relative;filter:drop-shadow(0 4px 16px rgba(107,140,58,.35));}
+.hero-ar{font-family:'Amiri',serif;font-size:1.5rem;color:var(--sky3);direction:rtl;position:relative;margin-bottom:.2rem;}
+.hero h1{font-family:'Amiri',serif;font-size:1.9rem;background:linear-gradient(90deg,var(--olive3),var(--sky3),var(--orange3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:.15rem 0;position:relative;}
+.hero p{color:var(--txt2);font-size:.85rem;position:relative;}
+
+/* SEARCH FILTERS BAR */
+.filter-bar{max-width:1200px;margin:.9rem auto 0;padding:0 1.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;}
+.filter-bar.fb-hidden{display:none;}
+.filter-bar input,.filter-bar select{background:var(--card);border:1px solid var(--brd);border-radius:7px;padding:.38rem .65rem;color:var(--txt);font-size:.8rem;font-family:inherit;outline:none;}
+.filter-bar input:focus,.filter-bar select:focus{border-color:var(--sky2);}
+.filter-bar select option{background:var(--navy2);}
+.fb-btn{background:var(--sky);color:#fff;border:none;padding:.38rem .8rem;border-radius:7px;cursor:pointer;font-size:.78rem;font-family:inherit;}
+.fb-clr{background:none;border:1px solid var(--brd);color:var(--txt2);padding:.38rem .7rem;border-radius:7px;cursor:pointer;font-size:.78rem;font-family:inherit;}
+
+/* MAIN */
+main{max-width:1200px;margin:0 auto;padding:1.6rem 1.5rem;}
+.sec-head{margin-bottom:.9rem;}
+.sec-title{font-family:'Amiri',serif;font-size:1.35rem;color:var(--olive3);display:flex;align-items:center;gap:.4rem;}
+.sec-title::before{content:'';width:3px;height:1em;background:var(--orange);border-radius:2px;}
+
+/* GRID */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.9rem;align-items:start;}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:560px){.grid{grid-template-columns:1fr;}}
+
+/* CARD — Facebook-like ratio */
+.card{background:var(--card);border:1px solid var(--brd);border-radius:11px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;transition:border-color .17s,transform .17s,box-shadow .17s;isolation:isolate;transform:translateZ(0);}
+.card:hover{border-color:var(--sky2);transform:translateY(-2px);box-shadow:0 6px 24px rgba(0,0,0,.55);}
+.card-inner{padding:.8rem .85rem .5rem;}
+.card-meta-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:.45rem;}
+.card-author-row{display:flex;align-items:center;gap:.4rem;}
+.card-av{width:22px;height:22px;border-radius:50%;object-fit:cover;border:1px solid var(--olive2);}
+.card-author{font-size:.72rem;color:var(--txt2);}
+.card-type-badge{font-size:.62rem;font-weight:700;padding:.13rem .42rem;border-radius:4px;letter-spacing:.3px;text-transform:uppercase;}
+.ct-recent{background:rgba(107,140,58,.2);color:var(--olive3);}
+.ct-blog{background:rgba(58,143,196,.2);color:var(--sky3);}
+.ct-guideline{background:rgba(224,120,32,.2);color:var(--orange3);}
+.card-title{font-family:'Amiri',serif;font-size:1.05rem;color:var(--txt);line-height:1.3;font-weight:700;margin-bottom:.3rem;}
+.card-excerpt{font-size:.78rem;color:var(--txt2);line-height:1.55;margin-bottom:.35rem;}
+.card-tags{display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.35rem;}
+.post-tag{font-size:.68rem;color:var(--sky2);cursor:pointer;background:rgba(58,143,196,.1);padding:.1rem .38rem;border-radius:4px;transition:background .15s;}
+.post-tag:hover{background:rgba(58,143,196,.25);}
+
+/* Image area — portrait ratio like Facebook/IG posts */
+.card-img-wrap{display:grid;grid-template-columns:2fr 1fr;gap:2px;background:var(--bg);aspect-ratio:4/3;overflow:hidden;border-radius:0;}
+.card-img-wrap.ci-single{grid-template-columns:1fr;aspect-ratio:16/9;}
+.ci-full{background-size:cover;background-position:center;width:100%;height:100%;}
+.ci-main{background-size:cover;background-position:center;height:100%;}
+.ci-side{display:flex;flex-direction:column;gap:2px;height:100%;}
+.ci-s1{flex:1;background-size:cover;background-position:center;}
+.ci-s1-full{flex:none;height:100%;background-size:cover;background-position:center;}
+.ci-s2{flex:1;background-size:cover;background-position:center;position:relative;overflow:hidden;}
+.ci-blur-overlay{position:absolute;inset:0;backdrop-filter:blur(6px);background:rgba(0,0,0,.3);}
+.ci-overlay{position:absolute;inset:0;backdrop-filter:blur(4px);background:rgba(0,0,0,.52);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.2rem;font-weight:700;}
+
+.card-footer-row{display:flex;justify-content:space-between;padding:.4rem .85rem .3rem;font-size:.68rem;color:var(--txt2);}
+
+/* Action bar */
+.cact{display:flex;border-top:1px solid var(--brd);}
+.ca{flex:1;background:none;border:none;border-right:1px solid var(--brd);cursor:pointer;color:var(--txt2);font-size:.75rem;font-family:inherit;padding:.48rem .3rem;display:flex;align-items:center;justify-content:center;gap:.25rem;transition:all .17s;}
+.ca:last-child{border-right:none;}
+.ca:hover{background:var(--bg3);color:var(--txt);}
+.ca.cal{color:#e05c5c;}.ca.cas{color:var(--orange2);}.ca-del:hover{background:#c0392b15;color:var(--red);}
+
+.shimmer{background:linear-gradient(90deg,var(--card) 25%,var(--bg3) 50%,var(--card) 75%);background-size:200% 100%;animation:sh 1.4s infinite;border-radius:11px;height:300px;}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.empty{grid-column:1/-1;text-align:center;padding:3rem;color:var(--txt2);}
+
+/* ── FLOATING COMMENT BOX ── */
+#commentBox{display:none;position:fixed;bottom:1.5rem;right:1.5rem;width:340px;max-height:480px;background:var(--navy2);border:1px solid var(--navy3);border-radius:14px;box-shadow:var(--sh);z-index:500;flex-direction:column;overflow:hidden;}
+.cb-header{display:flex;justify-content:space-between;align-items:center;padding:.7rem 1rem;border-bottom:1px solid var(--navy3);font-size:.85rem;font-weight:500;background:var(--navy3);}
+.cb-header button{background:none;border:none;color:rgba(255,255,255,.5);cursor:pointer;font-size:1rem;}
+.cb-list{flex:1;overflow-y:auto;padding:.7rem;min-height:80px;max-height:320px;}
+.cb-form{display:flex;gap:.4rem;align-items:center;padding:.6rem;border-top:1px solid var(--navy3);}
+.cb-form img{width:26px;height:26px;border-radius:50%;object-fit:cover;flex-shrink:0;}
+.cb-form input{flex:1;background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:.38rem .7rem;color:#fff;font-size:.8rem;font-family:inherit;outline:none;}
+.cb-form button{background:var(--sky);color:#fff;border:none;padding:.38rem .7rem;border-radius:20px;cursor:pointer;font-size:.85rem;}
+
+/* ── MODALS ── */
+.modal{display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;padding:1rem;}
+.mo{position:absolute;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(5px);}
+.mb{position:relative;background:var(--navy2);border:1px solid var(--navy3);border-radius:14px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--sh);}
+.mcl{position:sticky;top:.55rem;float:right;margin:.55rem .55rem 0 0;background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:7px;color:rgba(255,255,255,.5);width:28px;height:28px;cursor:pointer;font-size:.85rem;}
+.mcl:hover{color:#fff;}
+
+/* Post modal */
+.pmb{max-width:640px;}
+.pm-img-single{height:280px;background-size:cover;background-position:center;cursor:pointer;position:relative;overflow:hidden;border-radius:10px;margin-top:.9rem;transition:filter .2s;} .pm-img-single:hover{filter:brightness(1.08);} .pm-img-hover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.25);opacity:0;transition:opacity .2s;pointer-events:none;} .pm-img-single:hover .pm-img-hover{opacity:1;}
+.pm-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px;border-radius:10px;overflow:hidden;margin-top:.9rem;}
+.pm-gimg{height:150px;background-size:cover;background-position:center;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.pm-gimg:hover{filter:brightness(1.1);} .pm-gimg-hover{position:absolute;inset:0;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s;pointer-events:none;} .pm-gimg:hover .pm-gimg-hover{opacity:1;}
+.pm-bd{padding:1.2rem;}
+.pm-meta{display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem;font-size:.77rem;color:var(--txt2);}
+.pm-title{font-family:'Amiri',serif;font-size:1.6rem;color:var(--txt);margin-bottom:.5rem;line-height:1.3;}
+.pm-auth{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--txt2);margin-bottom:.8rem;}
+.pm-auth img{width:24px;height:24px;border-radius:50%;object-fit:cover;}
+.pm-rb{background:rgba(107,140,58,.2);color:var(--olive3);font-size:.62rem;padding:.08rem .4rem;border-radius:4px;margin-left:.2rem;}
+.pm-txt{color:var(--txt);line-height:1.8;font-size:.9rem;white-space:pre-wrap;}
+.pm-acts{display:flex;gap:.55rem;margin:1rem 0;}
+.pill{background:var(--navy3);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.6);padding:.33rem .8rem;border-radius:20px;cursor:pointer;font-size:.78rem;font-family:inherit;transition:all .17s;}
+.pill:hover,.pill.pla,.pill.psa{background:var(--olive);color:#fff;border-color:var(--olive2);}
+.cmw{border-top:1px solid var(--navy3);padding-top:.8rem;margin-top:.8rem;}
+.cmw h4{font-size:.74rem;color:var(--txt2);text-transform:uppercase;letter-spacing:1px;margin-bottom:.55rem;}
+.cmi{display:flex;gap:.5rem;margin-bottom:.5rem;padding:.42rem .5rem;border-radius:7px;background:var(--navy3);}
+.cmi img{width:22px;height:22px;border-radius:50%;object-fit:cover;flex-shrink:0;}
+.reply-btn{background:none;border:none;color:var(--sky2);font-size:.7rem;cursor:pointer;padding:.1rem .3rem;border-radius:4px;opacity:.6;transition:all .15s;}
+.reply-btn:hover{opacity:1;background:rgba(58,143,196,.15);}
+.reply-ref{display:inline-flex;align-items:center;gap:.25rem;font-size:.68rem;color:var(--sky2);margin:.15rem 0 .25rem;background:rgba(58,143,196,.1);padding:.1rem .45rem;border-radius:4px;border-left:2px solid var(--sky2);}
+.reply-chip{display:flex;align-items:center;gap:.4rem;background:rgba(58,143,196,.15);border:1px solid rgba(58,143,196,.3);border-radius:7px;padding:.28rem .6rem;margin-bottom:.35rem;font-size:.75rem;color:var(--sky2);}
+.reply-chip button{background:none;border:none;color:var(--sky2);cursor:pointer;font-size:.8rem;margin-left:auto;opacity:.7;}
+.reply-chip button:hover{opacity:1;}
+.cmi strong{font-size:.78rem;color:var(--txt);}
+.cmt{font-size:.66rem;color:var(--txt2);margin-left:.3rem;}
+.cmi p{font-size:.78rem;color:var(--txt2);margin-top:.1rem;}
+.cmf{display:flex;gap:.38rem;align-items:center;margin-top:.6rem;}
+.cmf img{width:24px;height:24px;border-radius:50%;flex-shrink:0;}
+.cmf input{flex:1;background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:.38rem .6rem;color:var(--txt);font-size:.78rem;font-family:inherit;outline:none;}
+.cmf input:focus{border-color:var(--sky2);}
+.cmf button{background:var(--sky);color:#fff;border:none;padding:.38rem .7rem;border-radius:7px;cursor:pointer;font-size:.78rem;font-family:inherit;}
+.cmt-h{color:var(--txt2);font-size:.78rem;text-align:center;padding:.4rem 0;}
+
+/* Create modal */
+.creatmb{max-width:540px;padding:1.3rem;}
+.creatmb h2{font-family:'Amiri',serif;font-size:1.3rem;background:linear-gradient(90deg,var(--olive3),var(--sky3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem;}
+.fg{margin-bottom:.75rem;position:relative;}
+.fg label{display:block;font-size:.7rem;color:var(--txt2);margin-bottom:.25rem;text-transform:uppercase;letter-spacing:.4px;}
+.fg input[type="datetime-local"]{color-scheme:dark;background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:.48rem .65rem;color:var(--txt);font-size:.85rem;font-family:inherit;outline:none;transition:border-color .17s;}
+.fg input[type="datetime-local"]:focus{border-color:var(--sky2);}
+.fg input,.fg select,.fg textarea{width:100%;background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:.48rem .65rem;color:var(--txt);font-size:.85rem;font-family:inherit;outline:none;transition:border-color .17s;}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--sky2);}
+.fg textarea{resize:vertical;min-height:100px;line-height:1.6;}
+.fg select option{background:var(--navy2);}
+.tag-hint{font-size:.68rem;color:var(--txt2);margin-top:.2rem;}
+.tag-suggest-box{position:absolute;background:var(--navy2);border:1px solid var(--navy3);border-radius:7px;z-index:10;width:100%;max-height:140px;overflow-y:auto;}
+.tag-sug{padding:.4rem .7rem;font-size:.8rem;color:var(--sky2);cursor:pointer;}
+.tag-sug:hover{background:var(--navy3);}
+.img-drop{border:2px dashed rgba(255,255,255,.12);border-radius:7px;padding:1rem;text-align:center;color:var(--txt2);font-size:.78rem;cursor:pointer;position:relative;transition:all .17s;}
+.img-drop:hover{border-color:var(--sky2);}
+.img-drop input{position:absolute;inset:0;opacity:0;cursor:pointer;}
+#imgPrev{display:flex;gap:6px;flex-wrap:wrap;margin-top:.4rem;}
+.sbrow{display:flex;gap:.5rem;margin-top:.9rem;}
+#submitBtn{background:var(--orange);color:#fff;border:none;padding:.5rem 1.1rem;border-radius:7px;cursor:pointer;font-weight:600;font-size:.85rem;font-family:inherit;flex:1;}
+#submitBtn:hover{background:var(--orange2);}
+#submitBtn:disabled{opacity:.5;cursor:not-allowed;}
+.canbtn{background:var(--navy3);border:1px solid rgba(255,255,255,.1);color:var(--txt2);padding:.5rem .8rem;border-radius:7px;cursor:pointer;font-family:inherit;}
+
+/* Profile modal */
+.profmb{max-width:650px;padding:1.3rem;}
+.ph{display:flex;gap:.8rem;align-items:center;margin-bottom:1rem;padding-bottom:.85rem;border-bottom:1px solid var(--navy3);}
+.pav{width:52px;height:52px;border-radius:50%;border:2px solid var(--olive3);object-fit:cover;}
+.ph h2{font-size:1rem;color:var(--txt);}
+.ph p{font-size:.76rem;color:var(--txt2);margin:.12rem 0 .35rem;}
+.role-badge{font-size:.66rem;padding:.14rem .48rem;border-radius:20px;font-weight:600;}
+.ptabs{display:flex;gap:.2rem;margin-bottom:.9rem;border-bottom:1px solid var(--navy3);padding-bottom:.38rem;}
+.ptab{background:none;border:none;color:rgba(255,255,255,.5);padding:.3rem .65rem;border-radius:7px;cursor:pointer;font-size:.78rem;font-family:inherit;transition:all .17s;}
+.ptab:hover{background:var(--navy3);}
+.ptab.active{background:rgba(107,140,58,.2);color:var(--olive3);}
+.tc{display:none;}.tc.active{display:block;}
+.tab-lbl{font-size:.7rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.55rem;}
+.spr{display:flex;justify-content:space-between;padding:.42rem .55rem;background:var(--navy3);border-radius:7px;margin-bottom:.28rem;cursor:pointer;font-size:.78rem;color:var(--txt);}
+.spr:hover{background:rgba(255,255,255,.08);}
+.spd{color:var(--txt2);font-size:.68rem;flex-shrink:0;margin-left:.35rem;}
+.mbh{display:flex;gap:.55rem;align-items:center;margin-bottom:.55rem;}
+.mbh input{flex:1;background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:.34rem .55rem;color:var(--txt);font-size:.76rem;outline:none;font-family:inherit;}
+.mbh input:focus{border-color:var(--sky2);}
+.rfrow{display:flex;gap:.25rem;margin-bottom:.55rem;flex-wrap:wrap;}
+.rf{background:var(--navy3);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.5);padding:.2rem .55rem;border-radius:20px;cursor:pointer;font-size:.7rem;font-family:inherit;transition:all .17s;}
+.rf.active{background:var(--olive);color:#fff;border-color:var(--olive2);}
+.mstats{display:flex;gap:.28rem;margin-bottom:.55rem;flex-wrap:wrap;}
+.msc{background:var(--navy3);border:1px solid rgba(255,255,255,.08);border-radius:7px;padding:.2rem .5rem;font-size:.7rem;color:var(--txt2);}
+.msc strong{color:var(--txt);margin-left:.15rem;}
+.mrow{display:flex;align-items:center;gap:.5rem;padding:.42rem .38rem;border-radius:8px;margin-bottom:.25rem;border:1px solid rgba(255,255,255,.07);background:var(--navy3);flex-wrap:wrap;}
+.mav{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0;}
+.minf{flex:1;min-width:0;}
+.minf strong{display:block;font-size:.8rem;color:var(--txt);}
+.minf small{font-size:.68rem;color:var(--txt2);}
+.you{background:rgba(107,140,58,.2);color:var(--olive3);font-size:.58rem;padding:.06rem .3rem;border-radius:3px;margin-left:.2rem;}
+.rbtns{display:flex;gap:.2rem;flex-wrap:wrap;}
+.rb{background:none;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.4);padding:.15rem .44rem;border-radius:5px;cursor:pointer;font-size:.66rem;font-family:inherit;transition:all .17s;}
+.rb.maintainer.rba,.rb.maintainer:hover{background:#a8cc5a18;color:#a8cc5a;border-color:#a8cc5a40;}
+.rb.admin.rba,.rb.admin:hover{background:#e05c5c18;color:#e05c5c;border-color:#e05c5c40;}
+.rb.worker.rba,.rb.worker:hover{background:#5aaee018;color:#5aaee0;border-color:#5aaee040;}
+.rb.user.rba,.rb.user:hover{background:#88888818;color:#aaa;border-color:#88888840;}
+.sirows{margin-bottom:.8rem;}
+.sir{display:flex;padding:.45rem 0;border-bottom:1px solid var(--navy3);font-size:.8rem;}
+.sir label{color:var(--txt2);width:110px;flex-shrink:0;}
+.sir span{color:var(--txt);}
+.danger-btn{background:#c0392b15;color:#e05c5c;border:1px solid #c0392b40;padding:.4rem .95rem;border-radius:7px;cursor:pointer;font-size:.8rem;font-family:inherit;transition:all .17s;}
+.danger-btn:hover{background:var(--red);color:#fff;}
+
+/* ABOUT US & FOOTER */
+.about-section{background:var(--navy);border-top:2px solid var(--navy3);padding:3rem 2rem;text-align:center;}
+.about-section h3{font-family:'Amiri',serif;font-size:1.5rem;background:linear-gradient(90deg,var(--olive3),var(--orange3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:.75rem;}
+.about-section p{color:var(--txt2);font-size:.85rem;max-width:520px;margin:0 auto .5rem;line-height:1.7;}
+.about-btns{display:flex;justify-content:center;gap:.75rem;margin-top:1.2rem;flex-wrap:wrap;}
+.about-btn-primary{background:var(--olive);color:#fff;border:none;padding:.55rem 1.4rem;border-radius:8px;cursor:pointer;font-size:.88rem;font-family:inherit;font-weight:600;text-decoration:none;transition:background .17s;}
+.about-btn-primary:hover{background:var(--olive2);}
+.about-btn-sec{background:none;color:var(--sky3);border:1px solid var(--sky2);padding:.55rem 1.2rem;border-radius:8px;cursor:pointer;font-size:.88rem;font-family:inherit;text-decoration:none;transition:all .17s;}
+.about-btn-sec:hover{background:rgba(58,143,196,.1);}
+footer{background:var(--navy);border-top:1px solid var(--navy3);padding:1.25rem;text-align:center;}
+footer p{color:var(--txt2);font-size:.75rem;}
+
+/* TOAST */
+.toast{position:fixed;bottom:1.3rem;left:50%;transform:translateX(-50%) translateY(65px);background:var(--navy2);border:1px solid var(--navy3);border-radius:9px;padding:.48rem .95rem;font-size:.8rem;color:var(--txt);box-shadow:var(--sh);z-index:9999;transition:transform .27s ease;white-space:nowrap;}
+.toast.show{transform:translateX(-50%) translateY(0);}
+.toast.error{border-color:#e05c5c;color:#e05c5c;}
+.toast.success{border-color:var(--olive3);color:var(--olive3);}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">
+    <img src="logo.jpeg" alt="উদ্দীপ্ত তরুণ সংঘ" onerror="this.style.display='none'"/>
+    <div class="nav-logo-text">
+      <strong>উদ্দীপ্ত তরুণ সংঘ</strong>
+      <em>DAWAH COMMUNITY</em>
+    </div>
+  </a>
+  <button class="nav-tab active" data-page="recent" onclick="loadPosts('recent')">সাম্প্রতিক</button>
+  <button class="nav-tab" data-page="blog" onclick="loadPosts('blog')">ব্লগ</button>
+  <button class="nav-tab" data-page="guideline" onclick="loadPosts('guideline')">নির্দেশিকা</button>
+  <div class="nav-sp"></div>
+  <div class="srch">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input id="searchInput" placeholder="খুঁজুন…" onkeydown="handleSearch(event)"/>
+  </div>
+  <button id="loginBtn" onclick="loginWithGoogle()">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    Login
+  </button>
+  <div id="profileArea">
+    <button id="newPostBtn" onclick="openCreatePost()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      নতুন পোস্ট
+    </button>
+    <button class="pa-btn" onclick="openProfile()">
+      <img class="pa-img" src="" alt=""/>
+      <span class="pa-name"></span>
+    </button>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <img src="logo.jpeg" alt="Logo" class="hero-logo" onerror="this.style.display='none'"/>
+  <div class="hero-ar">ادعُ إِلىٰ سَبيلِ رَبِّكَ بِالحِكمَةِ</div>
+  <h1>উদ্দীপ্ত তরুণ সংঘ</h1>
+  <p>Invite to the way of your Lord with wisdom — knowledge, guidance &amp; brotherhood</p>
+</div>
+
+<!-- FILTER BAR -->
+<div class="filter-bar fb-hidden">
+  <input id="tagFilter" placeholder="#ট্যাগ দিয়ে খুঁজুন" style="width:150px"/>
+  <input id="monthFilter" type="month" style="width:150px" title="মাস অনুযায়ী ফিল্টার"/>
+  <button class="fb-btn" onclick="applyFilters()">ফিল্টার করুন</button>
+  <button class="fb-clr" onclick="clearFilters()">মুছুন</button>
+</div>
+
+<!-- MAIN -->
+<main>
+  <div class="sec-head">
+    <h2 class="sec-title" id="sectionTitle">সাম্প্রতিক · This Month</h2>
+  </div>
+  <div class="grid" id="postsGrid"></div>
+</main>
+
+<!-- ABOUT & FOOTER -->
+<div class="about-section">
+  <h3>আমাদের সম্পর্কে · About Us</h3>
+  <p>উদ্দীপ্ত তরুণ সংঘ একটি দাওয়াহ কমিউনিটি প্ল্যাটফর্ম — যেখানে ইসলামিক জ্ঞান, নির্দেশিকা এবং ভ্রাতৃত্বের চর্চা হয়।</p>
+  <p>This platform exists to spread beneficial knowledge and build a community around Islamic guidance and dawah activities.</p>
+  <div class="about-btns">
+    <a href="#" class="about-btn-primary" onclick="document.getElementById('donateModal').style.display='flex'">🤝 অবদান রাখুন · Contribute</a>
+    <a href="mailto:contact@uddipto.org" class="about-btn-sec">✉️ যোগাযোগ করুন</a>
+  </div>
+</div>
+<footer><p>© ২০২৬ উদ্দীপ্ত তরুণ সংঘ · সকল অধিকার সংরক্ষিত</p></footer>
+
+<!-- FLOATING COMMENT BOX -->
+<div id="commentBox"></div>
+
+<!-- POST VIEW MODAL -->
+<div class="modal" id="postModal"></div>
+
+<!-- CREATE POST MODAL -->
+<div class="modal" id="createModal">
+  <div class="mo" onclick="closeModal('createModal')"></div>
+  <div class="mb creatmb">
+    <button class="mcl" onclick="closeModal('createModal')">✕</button>
+    <h2>নতুন পোস্ট · New Post</h2>
+    <div class="fg">
+      <label>Post Type</label>
+      <select id="ptype">
+        <option value="blog">ব্লগ · Blog</option>
+        <option value="guideline">নির্দেশিকা · Guideline</option>
+      </select>
+    </div>
+    <div class="fg"><label>শিরোনাম · Title</label><input id="ptitle" placeholder="পোস্টের শিরোনাম…"/></div>
+    <div class="fg"><label>বিষয়বস্তু · Content (optional)</label><textarea id="pbody" placeholder="লিখুন…"></textarea></div>
+    <div class="fg">
+      <label>ট্যাগ · Tags (use # symbol, max 5)</label>
+      <input id="tagInput" placeholder="#দাওয়াহ #ইসলাম #youth" oninput="handleTagInput(event)"/>
+      <div class="tag-hint">উদাহরণ: #দাওয়াহ #ইসলাম — ট্যাগ টাইপ করলে সাজেশন আসবে</div>
+      <div id="tagSuggest" class="tag-suggest-box"></div>
+    </div>
+    <div class="fg">
+      <label>তারিখ · Post Date <span style="color:var(--txt2);font-weight:400;text-transform:none;">(না দিলে এখনকার সময়)</span></label>
+      <input type="datetime-local" id="pdate" style="width:100%;"/>
+      <div class="tag-hint">পুরনো তারিখে পোস্ট করতে চাইলে এখানে সেট করুন</div>
+    </div>
+    <div class="fg">
+      <label>ছবি · Images (optional, max 5)</label>
+      <div class="img-drop"><input type="file" id="pimg" accept="image/*" multiple onchange="prevImgs(this)"/>📷 ছবি বেছে নিন (একাধিক সম্ভব)</div>
+      <div id="imgPrev"></div>
+    </div>
+    <div class="sbrow">
+      <button class="canbtn" onclick="closeModal('createModal')">বাতিল</button>
+      <button id="submitBtn" onclick="submitPost()">প্রকাশ করুন</button>
+    </div>
+  </div>
+</div>
+
+<!-- PROFILE MODAL -->
+<div class="modal" id="profileModal"></div>
+
+<!-- DONATE/CONTRIBUTE MODAL -->
+<div class="modal" id="donateModal">
+  <div class="mo" onclick="closeModal('donateModal')"></div>
+  <div class="mb" style="max-width:480px;padding:1.4rem;">
+    <button class="mcl" onclick="closeModal('donateModal')">✕</button>
+    <h2 style="font-family:'Amiri',serif;font-size:1.4rem;background:linear-gradient(90deg,var(--olive3),var(--orange3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem;">🤝 অবদান রাখুন</h2>
+    <p style="font-size:.85rem;color:var(--txt2);margin-bottom:1.2rem;line-height:1.7;">উদ্দীপ্ত তরুণ সংঘের কার্যক্রম পরিচালনায় আপনার সহযোগিতা আমাদের অনুপ্রেরণা।</p>
+    <div style="background:var(--navy3);border-radius:10px;padding:.85rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.75rem;">
+      <div style="background:#e91e8c;width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0;">b</div>
+      <div><strong style="font-size:.88rem;">bKash</strong><br/><span style="font-size:.75rem;color:var(--txt2);">Personal / Send Money</span></div>
+      <span style="margin-left:auto;background:var(--navy2);padding:.3rem .7rem;border-radius:7px;font-size:.82rem;">01XXXXXXXXX</span>
+    </div>
+    <div style="background:var(--navy3);border-radius:10px;padding:.85rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.75rem;">
+      <div style="background:#f7941d;width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;font-weight:700;flex-shrink:0;">N</div>
+      <div><strong style="font-size:.88rem;">Nagad</strong><br/><span style="font-size:.75rem;color:var(--txt2);">Personal / Send Money</span></div>
+      <span style="margin-left:auto;background:var(--navy2);padding:.3rem .7rem;border-radius:7px;font-size:.82rem;">01XXXXXXXXX</span>
+    </div>
+    <p style="font-size:.75rem;color:var(--txt2);text-align:center;margin-top:.75rem;">দান করার পর আমাদের সাথে যোগাযোগ করুন।</p>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- LIGHTBOX -->
+<div id="lightbox" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.95);align-items:center;justify-content:center;flex-direction:column;gap:.8rem;" onclick="if(event.target.id==='lightbox')closeLightbox()">
+  <div class="lb-img" style="width:min(90vw,900px);height:min(80vh,700px);background-size:contain;background-repeat:no-repeat;background-position:center;border-radius:10px;"></div>
+  <div style="display:flex;align-items:center;gap:1.2rem;">
+    <button class="lb-prev" onclick="lbPrev()" style="display:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.1rem;align-items:center;justify-content:center;">‹</button>
+    <span class="lb-counter" style="color:rgba(255,255,255,.6);font-size:.82rem;min-width:50px;text-align:center;"></span>
+    <button class="lb-next" onclick="lbNext()" style="display:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.1rem;align-items:center;justify-content:center;">›</button>
+  </div>
+  <button onclick="closeLightbox()" style="position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1rem;">✕</button>
+</div>
+
+<script>
+// Update section title on tab change
+const _origLoad = window.loadPosts;
+window.loadPosts = function(page) {
+  _origLoad(page);
+  const titles = {recent:'সাম্প্রতিক · This Month', blog:'ব্লগ · Blogs', guideline:'নির্দেশিকা · Guidelines'};
+  const st = document.getElementById('sectionTitle');
+  if (st) st.textContent = titles[page]||'Posts';
+};
+</script>
+</body>
+</html>
