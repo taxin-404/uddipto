@@ -36,7 +36,11 @@ let searchQuery = '', searchTag = '', searchMonth = '';
 // ── AUTH ──
 window.loginWithGoogle = async () => {
   try { await signInWithPopup(auth, gp); }
-  catch(e) { toast('Login failed: ' + e.message, 'error'); }
+  catch(e) {
+    if (e.code === 'auth/popup-closed-by-user') return; // user just closed, no error needed
+    if (e.code === 'auth/network-request-failed') toast('নেটওয়ার্ক সমস্যা, আবার চেষ্টা করুন', 'error');
+    else toast('লগইন হয়নি। আবার চেষ্টা করুন।', 'error');
+  }
 };
 window.logout = async () => { await signOut(auth); toast('লগআউট হয়েছে'); closeAllModals(); };
 
@@ -94,6 +98,18 @@ window.loadPosts = (page = currentPage) => {
   const fb = document.querySelector('.filter-bar');
   if (fb) fb.classList.toggle('fb-hidden', page === 'recent');
 
+  // Populate tag filter dropdown when showing filter bar
+  if (page !== 'recent') {
+    loadTags().then(() => {
+      const sel = document.getElementById('tagFilter');
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">সব ট্যাগ</option>';
+      allTags.forEach(t => { const o = document.createElement('option'); o.value=t; o.textContent='#'+t; sel.appendChild(o); });
+      sel.value = current; // restore selection
+    });
+  }
+
   // Clear month filter when switching to recent (it auto-filters by current month)
   if (page === 'recent') {
     searchMonth = '';
@@ -141,6 +157,12 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 
 function renderPosts(posts) {
   const grid = document.getElementById('postsGrid');
+  // Update count in section title
+  const st = document.getElementById('sectionTitle');
+  if (st) {
+    const base = st.textContent.replace(/\s*\(\d+\)$/,'');
+    st.textContent = base + (posts.length ? ` (${posts.length})` : '');
+  }
   if (!posts.length) {
     grid.innerHTML = `<div class="empty"><div style="font-size:2rem;margin-bottom:.5rem">☽</div><p>কোনো পোস্ট নেই।</p></div>`;
     return;
@@ -220,8 +242,8 @@ function cardHtml(p) {
         <svg width="12" height="12" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
         save
       </button>
-      ${canDelete(p)?`<button class="ca ca-del" onclick="deletePost('${p.id}')">✕</button>`:''}
-    </div>
+      ${canDelete(p)?`<button class="ca ca-del" onclick="deletePost('${p.id}')">✕ মুছুন</button>`:''}
+      ${canDelete(p)?`<button class="ca ca-edt" onclick="editPost('${p.id}')">✎ সম্পাদনা</button>`:''}    </div>
   </div>`;
 }
 
@@ -415,30 +437,98 @@ window.postComment = async pid => {
 // ── LIKES & SAVES ──
 window.toggleLike = async (id,btn) => {
   if (!currentUser) { toast('লাইক দিতে লগইন করুন','error'); return; }
-  const r = doc(db,'posts',id), s = await getDoc(r);
-  const liked = (s.data()?.likes||[]).includes(currentUser.uid);
-  await updateDoc(r, { likes:liked?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid), likeCount:increment(liked?-1:1) });
-  btn?.classList.toggle('cal',!liked); btn?.classList.toggle('pla',!liked);
+  try {
+    const r = doc(db,'posts',id), s = await getDoc(r);
+    const liked = (s.data()?.likes||[]).includes(currentUser.uid);
+    await updateDoc(r, { likes:liked?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid), likeCount:increment(liked?-1:1) });
+    btn?.classList.toggle('cal',!liked); btn?.classList.toggle('pla',!liked);
+  } catch(e) { toast('সমস্যা হয়েছে','error'); }
 };
 window.toggleSave = async (id,btn) => {
   if (!currentUser) { toast('সেভ করতে লগইন করুন','error'); return; }
-  const pr=doc(db,'posts',id), ur=doc(db,'users',currentUser.uid), s=await getDoc(pr);
-  const saved=(s.data()?.savedBy||[]).includes(currentUser.uid);
-  await updateDoc(pr,{savedBy:saved?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid)});
-  await updateDoc(ur,{savedPosts:saved?arrayRemove(id):arrayUnion(id)});
-  btn?.classList.toggle('cas',!saved); btn?.classList.toggle('psa',!saved);
-  toast(saved?'সেভ সরানো হয়েছে':'সেভ হয়েছে! ✓');
+  try {
+    const pr=doc(db,'posts',id), ur=doc(db,'users',currentUser.uid), s=await getDoc(pr);
+    const saved=(s.data()?.savedBy||[]).includes(currentUser.uid);
+    await updateDoc(pr,{savedBy:saved?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid)});
+    await updateDoc(ur,{savedPosts:saved?arrayRemove(id):arrayUnion(id)});
+    btn?.classList.toggle('cas',!saved); btn?.classList.toggle('psa',!saved);
+    toast(saved?'সেভ সরানো হয়েছে':'সেভ হয়েছে! ✓');
+  } catch(e) { toast('সমস্যা হয়েছে','error'); }
 };
+// ── EDIT POST ──
+window.editPost = async id => {
+  if (!currentUser) return;
+  const snap = await getDoc(doc(db,'posts',id));
+  if (!snap.exists()) return;
+  const p = snap.data();
+  await loadTags();
+  _selectedTags = [...(p.tags||[])];
+  tagPickerRenderChips();
+  document.getElementById('ptype').value = p.type||'blog';
+  document.getElementById('ptitle').value = p.title||'';
+  document.getElementById('pbody').value = p.body||'';
+  document.getElementById('tagSearchInp').value = '';
+  document.getElementById('tagDropdown').style.display = 'none';
+  document.getElementById('imgPrev').innerHTML = '';
+  document.getElementById('pimg').value = '';
+  document.querySelector('.creatmb h2').textContent = '✎ পোস্ট সম্পাদনা · Edit Post';
+  const btn = document.getElementById('submitBtn');
+  btn.textContent = 'আপডেট করুন';
+  btn.disabled = false;
+  btn.dataset.editId = id;
+  btn.setAttribute('onclick', 'submitEdit()');
+  document.getElementById('createModal').style.display = 'flex';
+};
+
+window.submitEdit = async () => {
+  const btn = document.getElementById('submitBtn');
+  const id = btn.dataset.editId;
+  if (!id || !currentUser) return;
+  const title = document.getElementById('ptitle').value.trim();
+  const body = document.getElementById('pbody').value.trim();
+  const type = document.getElementById('ptype').value;
+  const tags = parseTags();
+  if (!title) { toast('শিরোনাম দিন','error'); return; }
+  btn.disabled = true; btn.textContent = 'আপডেট হচ্ছে…';
+  try {
+    await updateDoc(doc(db,'posts',id), { title, body, type, tags });
+    toast('আপডেট হয়েছে! ✓');
+    closeModal('createModal');
+    resetCreateModal();
+    _srchLoaded = false;
+  } catch(e) {
+    toast('সমস্যা হয়েছে: '+e.message,'error');
+    btn.disabled = false; btn.textContent = 'আপডেট করুন';
+  }
+};
+
+function resetCreateModal() {
+  document.querySelector('.creatmb h2').textContent = 'নতুন পোস্ট · New Post';
+  const btn = document.getElementById('submitBtn');
+  btn.textContent = 'প্রকাশ করুন';
+  btn.disabled = false;
+  btn.setAttribute('onclick', 'submitPost()');
+  // Clear form fields
+  ['ptitle','pbody','pdate'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  const pimg = document.getElementById('pimg'); if(pimg) pimg.value='';
+  const imgPrev = document.getElementById('imgPrev'); if(imgPrev) imgPrev.innerHTML='';
+}
+
 window.deletePost = async id => {
   if (!confirm('এই পোস্ট মুছে দেবেন?')) return;
-  await deleteDoc(doc(db,'posts',id)); toast('পোস্ট মুছে গেছে');
+  try {
+    await deleteDoc(doc(db,'posts',id));
+    toast('পোস্ট মুছে গেছে');
+    // Close post modal if it's open showing this post
+    const pm = document.getElementById('postModal');
+    if (pm && pm.style.display === 'flex') closeModal('postModal');
+  } catch(e) {
+    toast('মুছতে সমস্যা হয়েছে: ' + e.message, 'error');
+  }
 };
 
 // ── SEARCH ──
 window.filterByTag = tag => { openSearch(); setTimeout(()=>{ document.getElementById('srchTagSel').value=tag; runSearch(); },100); };
-window.handleSearch = e => {};
-window.applyFilters = () => {};
-window.clearFilters = () => {};
 
 let _srchType = '', _srchAllPosts = [], _srchLoaded = false;
 window.openSearch = async () => {
@@ -689,6 +779,7 @@ window.openCreatePost = () => {
   tagPickerRenderChips();
   const si = document.getElementById('tagSearchInp'); if(si) { si.value=''; }
   const dd = document.getElementById('tagDropdown'); if(dd) dd.style.display='none';
+  resetCreateModal();
   document.getElementById('createModal').style.display='flex';
 };
 
@@ -779,34 +870,38 @@ window.submitPost = async () => {
   if (!title) { toast('শিরোনাম দিন','error'); return; }
   const btn = document.getElementById('submitBtn');
   btn.disabled=true; btn.textContent='প্রকাশ হচ্ছে…';
-  const createdAt = dateVal ? Timestamp.fromDate(new Date(dateVal)) : serverTimestamp();
-  const tags = parseTags();
-  // Upload a single file to Firebase Storage, return download URL
-  const uploadImg = async file => {
-    try {
-      const fd=new FormData(); fd.append('image',file);
-      const res=await fetch('https://api.imgur.com/3/image',{method:'POST',headers:{Authorization:'Client-ID 546c25a59c58ad7'},body:fd});
-      const d=await res.json(); return d.success?d.data.link:'';
-    } catch(e){return'';}
-  };
-  btn.textContent='ছবি আপলোড হচ্ছে…';
-  const urls = imgFiles.length ? (await Promise.all(imgFiles.map(uploadImg))).filter(Boolean) : [];
-  btn.textContent='সেভ হচ্ছে…';
-  await addDoc(collection(db,'posts'),{
-    title, body, type, tags, imageUrl:urls[0]||'', images:urls.slice(1),
-    authorId:currentUser.uid, authorName:currentUser.displayName,
-    authorPhoto:currentUser.photoURL, authorRole:currentRole,
-    createdAt, likeCount:0, commentCount:0, viewCount:0, likes:[], savedBy:[]
-  });
-  btn.disabled=false; btn.textContent='প্রকাশ করুন';
-  closeModal('createModal');
-  ['ptitle','pbody','pdate'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('pimg').value='';
-  document.getElementById('imgPrev').innerHTML='';
-  tagPickerReset();
-  document.getElementById('tagSearchInp').value='';
-  toast('প্রকাশিত হয়েছে! بارك الله فيك');
-  _srchLoaded = false; // invalidate search cache
+  try {
+    const createdAt = dateVal ? Timestamp.fromDate(new Date(dateVal)) : serverTimestamp();
+    const tags = parseTags();
+    const uploadImg = async file => {
+      try {
+        const fd=new FormData(); fd.append('image',file);
+        const res=await fetch('https://api.imgur.com/3/image',{method:'POST',headers:{Authorization:'Client-ID 546c25a59c58ad7'},body:fd});
+        const d=await res.json(); return d.success?d.data.link:'';
+      } catch(e){return'';}
+    };
+    btn.textContent='ছবি আপলোড হচ্ছে…';
+    const urls = imgFiles.length ? (await Promise.all(imgFiles.map(uploadImg))).filter(Boolean) : [];
+    btn.textContent='সেভ হচ্ছে…';
+    await addDoc(collection(db,'posts'),{
+      title, body, type, tags, imageUrl:urls[0]||'', images:urls.slice(1),
+      authorId:currentUser.uid, authorName:currentUser.displayName,
+      authorPhoto:currentUser.photoURL, authorRole:currentRole,
+      createdAt, likeCount:0, commentCount:0, viewCount:0, likes:[], savedBy:[]
+    });
+    btn.disabled=false; btn.textContent='প্রকাশ করুন';
+    closeModal('createModal');
+    ['ptitle','pbody','pdate'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('pimg').value='';
+    document.getElementById('imgPrev').innerHTML='';
+    tagPickerReset();
+    document.getElementById('tagSearchInp').value='';
+    toast('প্রকাশিত হয়েছে! بارك الله فيك');
+    _srchLoaded = false;
+  } catch(e) {
+    btn.disabled=false; btn.textContent='প্রকাশ করুন';
+    toast('পোস্ট করতে সমস্যা: ' + e.message, 'error');
+  }
 };
 
 window.prevImgs = inp => {
@@ -908,23 +1003,47 @@ window.renderMembers = members => {
 window.filterM=v=>renderMembers(allMembers.filter(m=>(m.name||'').toLowerCase().includes(v.toLowerCase())||(m.email||'').toLowerCase().includes(v.toLowerCase())));
 window.filterR=(btn,role)=>{document.querySelectorAll('.rf').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMembers(role==='all'?allMembers:allMembers.filter(m=>m.role===role));};
 window.setRole=async(uid,role,btn)=>{
-  await updateDoc(doc(db,'users',uid),{role});
-  const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
-  const row=btn.closest('.mrow');
-  row.querySelectorAll('.rb').forEach(b=>b.classList.remove('rba'));btn.classList.add('rba');
-  const badge=row.querySelector('.role-badge');
-  badge.textContent=role; badge.style.cssText=`background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}40`;
-  allMembers=allMembers.map(m=>m.uid===uid?{...m,role}:m); toast(`ভূমিকা → ${role}`);
+  try {
+    await updateDoc(doc(db,'users',uid),{role});
+    const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+    const row=btn.closest('.mrow');
+    row.querySelectorAll('.rb').forEach(b=>b.classList.remove('rba'));btn.classList.add('rba');
+    const badge=row.querySelector('.role-badge');
+    badge.textContent=role; badge.style.cssText=`background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}40`;
+    allMembers=allMembers.map(m=>m.uid===uid?{...m,role}:m); toast(`ভূমিকা → ${role}`);
+  } catch(e) { toast('ভূমিকা পরিবর্তন করা যায়নি','error'); }
 };
 
 // ── UTILS ──
 window.closeModal=id=>{document.getElementById(id).style.display='none';};
-window.closeAllModals=()=>['postModal','createModal','profileModal'].forEach(id=>document.getElementById(id).style.display='none');
+window.closeAllModals=()=>['postModal','createModal','profileModal','donateModal','searchModal'].forEach(id=>document.getElementById(id).style.display='none');
 window.toast=(msg,type='success')=>{
   const t=document.getElementById('toast');t.textContent=msg;
   t.className='toast show '+type;setTimeout(()=>t.classList.remove('show'),3000);
 };
+// Close modals on Escape key
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const lb = document.getElementById('lightbox');
+    if (lb && lb.style.display === 'flex') { closeLightbox(); return; }
+    const openModal = ['postModal','createModal','profileModal','donateModal','searchModal'].find(id => {
+      const el = document.getElementById(id);
+      return el && el.style.display === 'flex';
+    });
+    if (openModal) { closeModal(openModal); if (openModal==='createModal') resetCreateModal(); }
+  }
+  // Lightbox arrow keys
+  const lb = document.getElementById('lightbox');
+  if (lb && lb.style.display === 'flex') {
+    if (e.key === 'ArrowLeft') lbPrev();
+    else if (e.key === 'ArrowRight') lbNext();
+  }
+});
 window.addEventListener('load',()=>loadPosts('recent'));
+window.addEventListener('scroll',()=>{
+  const btn = document.getElementById('backToTop');
+  if (btn) btn.classList.toggle('visible', window.scrollY > 400);
+});
 
 // LIGHTBOX
 let _lbImgs = [], _lbIdx = 0;
@@ -945,14 +1064,6 @@ function renderLightbox() {
 window.lbPrev = () => { _lbIdx = (_lbIdx - 1 + _lbImgs.length) % _lbImgs.length; renderLightbox(); };
 window.lbNext = () => { _lbIdx = (_lbIdx + 1) % _lbImgs.length; renderLightbox(); };
 window.closeLightbox = () => { document.getElementById('lightbox').style.display = 'none'; };
-document.addEventListener('keydown', e => {
-  const lb = document.getElementById('lightbox');
-  if (lb && lb.style.display === 'flex') {
-    if (e.key === 'ArrowLeft') lbPrev();
-    else if (e.key === 'ArrowRight') lbNext();
-    else if (e.key === 'Escape') closeLightbox();
-  }
-});
 </script>
 
 <style>
@@ -1092,7 +1203,7 @@ main{max-width:1200px;margin:0 auto;padding:1.6rem 1.5rem;}
 .ca{flex:1;background:none;border:none;border-right:1px solid var(--brd);cursor:pointer;color:var(--txt2);font-size:.75rem;font-family:inherit;padding:.48rem .3rem;display:flex;align-items:center;justify-content:center;gap:.25rem;transition:all .17s;}
 .ca:last-child{border-right:none;}
 .ca:hover{background:var(--bg3);color:var(--txt);}
-.ca.cal{color:var(--sky2);}.ca.cas{color:var(--orange2);}.ca-del:hover{background:#c0392b15;color:var(--red);}
+.ca.cal{color:var(--sky2);}.ca.cas{color:var(--orange2);}.ca-del:hover{background:#c0392b15;color:var(--red);}.ca-edt:hover{background:rgba(168,204,90,.1);color:var(--olive3);}
 
 .shimmer{background:linear-gradient(90deg,var(--card) 25%,var(--bg3) 50%,var(--card) 75%);background-size:200% 100%;animation:sh 1.4s infinite;border-radius:11px;height:300px;}
 @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
@@ -1255,6 +1366,22 @@ main{max-width:1200px;margin:0 auto;padding:1.6rem 1.5rem;}
 footer{background:var(--navy);border-top:1px solid var(--navy3);padding:1.25rem;text-align:center;}
 footer p{color:var(--txt2);font-size:.75rem;}
 
+/* FILTER BAR */
+.filter-bar{background:var(--navy2);border-bottom:1px solid var(--navy3);padding:.55rem 1.5rem;transition:all .2s;}
+.filter-bar.fb-hidden{display:none;}
+.fb-inner{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;max-width:1200px;margin:0 auto;}
+.fb-group{display:flex;align-items:center;gap:.4rem;font-size:.72rem;color:var(--txt2);}
+.fb-group label{text-transform:uppercase;letter-spacing:.4px;flex-shrink:0;}
+.fb-group select,.fb-month{background:var(--navy3);border:1px solid rgba(255,255,255,.1);border-radius:7px;color:var(--txt);font-size:.78rem;font-family:inherit;padding:.24rem .5rem;outline:none;cursor:pointer;color-scheme:dark;}
+.fb-group select:focus,.fb-month:focus{border-color:var(--sky2);}
+.fb-clear{background:none;border:1px solid rgba(255,255,255,.1);color:var(--txt2);border-radius:7px;padding:.22rem .55rem;cursor:pointer;font-size:.7rem;font-family:inherit;margin-left:auto;transition:all .17s;}
+.fb-clear:hover{border-color:var(--red);color:var(--red);}
+
+/* BACK TO TOP */
+#backToTop{display:none;position:fixed;bottom:1.5rem;left:1.5rem;width:38px;height:38px;border-radius:50%;background:var(--navy2);border:1px solid var(--navy3);color:var(--txt2);font-size:1.1rem;cursor:pointer;z-index:400;transition:all .2s;box-shadow:var(--sh);}
+#backToTop:hover{background:var(--olive);color:#fff;border-color:var(--olive2);}
+#backToTop.visible{display:flex;align-items:center;justify-content:center;}
+
 /* TOAST */
 .toast{position:fixed;bottom:1.3rem;left:50%;transform:translateX(-50%) translateY(65px);background:var(--navy2);border:1px solid var(--navy3);border-radius:9px;padding:.48rem .95rem;font-size:.8rem;color:var(--txt);box-shadow:var(--sh);z-index:9999;transition:transform .27s ease;white-space:nowrap;}
 .toast.show{transform:translateX(-50%) translateY(0);}
@@ -1305,7 +1432,22 @@ footer p{color:var(--txt2);font-size:.75rem;}
   <p>Invite to the way of your Lord with wisdom — knowledge, guidance &amp; brotherhood</p>
 </div>
 
-<!-- filter bar moved to search modal -->
+<!-- filter bar -->
+<div class="filter-bar fb-hidden" id="filterBar">
+  <div class="fb-inner">
+    <div class="fb-group">
+      <label>ট্যাগ</label>
+      <select id="tagFilter" onchange="searchTag=this.value;loadPosts(currentPage)">
+        <option value="">সব ট্যাগ</option>
+      </select>
+    </div>
+    <div class="fb-group">
+      <label>মাস</label>
+      <input type="month" id="monthFilter" onchange="searchMonth=this.value;loadPosts(currentPage)" class="fb-month"/>
+    </div>
+    <button class="fb-clear" onclick="searchTag='';searchMonth='';document.getElementById('tagFilter').value='';document.getElementById('monthFilter').value='';loadPosts(currentPage)">✕ ফিল্টার মুছুন</button>
+  </div>
+</div>
 
 <!-- MAIN -->
 <main>
@@ -1337,8 +1479,7 @@ footer p{color:var(--txt2);font-size:.75rem;}
 <div class="modal" id="createModal">
   <div class="mo" onclick="closeModal('createModal')"></div>
   <div class="mb creatmb">
-    <button class="mcl" onclick="closeModal('createModal')">✕</button>
-    <h2>নতুন পোস্ট · New Post</h2>
+    <button class="mcl" onclick="closeModal('createModal');resetCreateModal()">✕</button>
     <div class="fg">
       <label>Post Type</label>
       <select id="ptype">
@@ -1371,7 +1512,7 @@ footer p{color:var(--txt2);font-size:.75rem;}
       <div id="imgPrev"></div>
     </div>
     <div class="sbrow">
-      <button class="canbtn" onclick="closeModal('createModal')">বাতিল</button>
+      <button class="canbtn" onclick="closeModal('createModal');resetCreateModal()">বাতিল</button>
       <button id="submitBtn" onclick="submitPost()">প্রকাশ করুন</button>
     </div>
   </div>
@@ -1402,6 +1543,9 @@ footer p{color:var(--txt2);font-size:.75rem;}
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- BACK TO TOP -->
+<button id="backToTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="উপরে যান">↑</button>
 
 <!-- SEARCH MODAL -->
 <div class="modal" id="searchModal" style="align-items:flex-start;padding-top:4rem;">
@@ -1467,15 +1611,6 @@ footer p{color:var(--txt2);font-size:.75rem;}
   <button onclick="closeLightbox()" style="position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1rem;">✕</button>
 </div>
 
-<script>
-// Update section title on tab change
-const _origLoad = window.loadPosts;
-window.loadPosts = function(page) {
-  _origLoad(page);
-  const titles = {recent:'সাম্প্রতিক · This Month', blog:'কার্যক্রম · Activities', guideline:'নির্দেশিকা · Guidelines'};
-  const st = document.getElementById('sectionTitle');
-  if (st) st.textContent = titles[page]||'Posts';
-};
-</script>
+
 </body>
 </html>
