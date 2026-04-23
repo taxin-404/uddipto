@@ -15,6 +15,7 @@ import { getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, updateD
   serverTimestamp, increment, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
+
 const firebaseConfig = {
   apiKey: "AIzaSyBnCgL4iEgeJrAT2Fla9JaZ3EnOe5JJoPg",
   authDomain: "uddipto-4d584.firebaseapp.com",
@@ -32,6 +33,13 @@ const gp = new GoogleAuthProvider();
 let currentUser = null, currentRole = 'user', currentPage = 'recent';
 let unsubPosts = null, allMembers = [], allTags = [];
 let searchQuery = '', searchTag = '', searchMonth = '';
+let _tagsLoaded = false, _membersLoaded = false;
+let _unsubCmList = null, _unsubCbList = null;
+const _liking = new Set(), _saving = new Set();
+
+function debounce(fn, ms) {
+  let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
 
 // ── AUTH ──
 window.loginWithGoogle = async () => {
@@ -56,6 +64,7 @@ onAuthStateChanged(auth, async user => {
     pa.querySelector('.pa-name').textContent = user.displayName?.split(' ')[0]||'';
   } else {
     currentRole = 'user';
+    _tagsLoaded = false; _membersLoaded = false; _srchLoaded = false;
     document.getElementById('loginBtn').style.display = 'flex';
     document.getElementById('profileArea').style.display = 'none';
   }
@@ -70,9 +79,11 @@ function canPost() { return ['maintainer','admin','worker'].includes(currentRole
 function canDelete(p) { return currentUser && (currentRole==='maintainer'||currentRole==='admin'||(currentRole==='worker'&&p.authorId===currentUser.uid)); }
 
 // ── TAGS ──
-async function loadTags() {
+async function loadTags(force = false) {
+  if (_tagsLoaded && !force) return;
   const snap = await getDocs(collection(db,'tags'));
   allTags = snap.docs.map(d => d.data().name).filter(Boolean);
+  _tagsLoaded = true;
 }
 async function saveTag(name) {
   const clean = name.trim().toLowerCase().replace(/\s+/g,'-');
@@ -89,17 +100,6 @@ window.loadPosts = (page = currentPage) => {
   const titleMap = { recent:'সাম্প্রতিক · This Month', blog:'কার্যক্রম · Activities', guideline:'নির্দেশিকা · Guidelines' };
   const st = document.getElementById('sectionTitle');
   if (st) st.textContent = titleMap[page]||'Posts';
-
-  // Toggle filter bar — hidden on recent, visible on blog/guideline
-  const fb = document.querySelector('.filter-bar');
-  if (fb) fb.classList.toggle('fb-hidden', page === 'recent');
-
-  // Clear month filter when switching to recent (it auto-filters by current month)
-  if (page === 'recent') {
-    searchMonth = '';
-    const mf = document.getElementById('monthFilter');
-    if (mf) mf.value = '';
-  }
 
   const grid = document.getElementById('postsGrid');
   grid.innerHTML = Array(6).fill('<div class="shimmer"></div>').join('');
@@ -137,7 +137,7 @@ function tAgo(ts) {
   return d.toLocaleDateString('bn-BD',{day:'numeric',month:'short'});
 }
 
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 function renderPosts(posts) {
   const grid = document.getElementById('postsGrid');
@@ -165,11 +165,9 @@ function cardHtml(p) {
       </div>`;
     } else if (allImgs.length === 2) {
       // Two images: big left + full-height right — no fake blurred 3rd panel
-      imgBlock = `<div class="card-img-wrap" onclick="openPost('${p.id}')">
+      imgBlock = `<div class="card-img-wrap ci-equal" onclick="openPost('${p.id}')">
         <div class="ci-main" style="background-image:url('${esc(allImgs[0])}')"></div>
-        <div class="ci-side">
-          <div class="ci-s1 ci-s1-full" style="background-image:url('${esc(allImgs[1])}')"></div>
-        </div>
+        <div class="ci-main" style="background-image:url('${esc(allImgs[1])}')"></div>
       </div>`;
     } else {
       // 3+ images: big left + top-right + bottom-right (with count if >3)
@@ -298,7 +296,7 @@ window.openComments = async (id) => {
   box.innerHTML = `
     <div class="cb-header">
       <span>💬 ${esc(p.title||'Comments')}</span>
-      <button onclick="document.getElementById('commentBox').style.display='none'">✕</button>
+      <button onclick="if(_unsubCbList){_unsubCbList();_unsubCbList=null;}document.getElementById('commentBox').style.display='none'">✕</button>
     </div>
     <div class="cb-list" id="cbList"></div>
     ${currentUser
@@ -309,7 +307,8 @@ window.openComments = async (id) => {
         </div>`
       :'<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>'}`;
   box.style.display = 'flex';
-  onSnapshot(query(collection(db,'posts',id,'comments'), orderBy('createdAt','asc')), snap => {
+  if (_unsubCbList) { _unsubCbList(); _unsubCbList = null; }
+  _unsubCbList = onSnapshot(query(collection(db,'posts',id,'comments'), orderBy('createdAt','asc')), snap => {
     const list = document.getElementById('cbList');
     if (!list) return;
     if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
@@ -354,15 +353,24 @@ window.cbPostComment = async (pid) => {
   const inp = document.getElementById('cbInput');
   const txt = inp?.value?.trim(); if (!txt) return;
   const replyTo = _cbReplyTo; cbCancelReply();
-  await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
-    authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
-    replyTo: replyTo||null, createdAt:serverTimestamp() });
-  await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+  inp.disabled = true;
+  try {
+    await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
+      authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
+      replyTo: replyTo||null, createdAt:serverTimestamp() });
+    await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+  } catch(e) {
+    toast('মন্তব্য পাঠানো যায়নি','error');
+    if (inp) inp.value = txt;
+  } finally {
+    if (inp) inp.disabled = false;
+  }
 };
 
 window.loadComments = pid => {
   const list = document.getElementById('cmList'); if (!list) return;
-  onSnapshot(query(collection(db,'posts',pid,'comments'), orderBy('createdAt','asc')), snap => {
+  if (_unsubCmList) { _unsubCmList(); _unsubCmList = null; }
+  _unsubCmList = onSnapshot(query(collection(db,'posts',pid,'comments'), orderBy('createdAt','asc')), snap => {
     if (!document.getElementById('cmList')) return;
     if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
     list.innerHTML = snap.docs.map(d => {
@@ -406,39 +414,73 @@ window.postComment = async pid => {
   const inp = document.getElementById('cmIn');
   const txt = inp?.value?.trim(); if (!txt) return;
   const replyTo = _cmReplyTo; cmCancelReply();
-  await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
-    authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
-    replyTo: replyTo||null, createdAt:serverTimestamp() });
-  await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+  inp.disabled = true;
+  try {
+    await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
+      authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
+      replyTo: replyTo||null, createdAt:serverTimestamp() });
+    await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+  } catch(e) {
+    toast('মন্তব্য পাঠানো যায়নি','error');
+    if (inp) inp.value = txt;
+  } finally {
+    if (inp) inp.disabled = false;
+  }
 };
 
 // ── LIKES & SAVES ──
-window.toggleLike = async (id,btn) => {
+window.toggleLike = async (id, btn) => {
   if (!currentUser) { toast('লাইক দিতে লগইন করুন','error'); return; }
-  const r = doc(db,'posts',id), s = await getDoc(r);
-  const liked = (s.data()?.likes||[]).includes(currentUser.uid);
-  await updateDoc(r, { likes:liked?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid), likeCount:increment(liked?-1:1) });
-  btn?.classList.toggle('cal',!liked); btn?.classList.toggle('pla',!liked);
+  if (_liking.has(id)) return;
+  _liking.add(id);
+  const wasLiked = btn?.classList.contains('cal') || btn?.classList.contains('pla');
+  btn?.classList.toggle('cal', !wasLiked);
+  btn?.classList.toggle('pla', !wasLiked);
+  try {
+    await updateDoc(doc(db,'posts',id), {
+      likes: wasLiked ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid),
+      likeCount: increment(wasLiked ? -1 : 1)
+    });
+  } catch(e) {
+    btn?.classList.toggle('cal', wasLiked);
+    btn?.classList.toggle('pla', wasLiked);
+    toast('ত্রুটি হয়েছে','error');
+  } finally {
+    _liking.delete(id);
+  }
 };
-window.toggleSave = async (id,btn) => {
+window.toggleSave = async (id, btn) => {
   if (!currentUser) { toast('সেভ করতে লগইন করুন','error'); return; }
-  const pr=doc(db,'posts',id), ur=doc(db,'users',currentUser.uid), s=await getDoc(pr);
-  const saved=(s.data()?.savedBy||[]).includes(currentUser.uid);
-  await updateDoc(pr,{savedBy:saved?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid)});
-  await updateDoc(ur,{savedPosts:saved?arrayRemove(id):arrayUnion(id)});
-  btn?.classList.toggle('cas',!saved); btn?.classList.toggle('psa',!saved);
-  toast(saved?'সেভ সরানো হয়েছে':'সেভ হয়েছে! ✓');
+  if (_saving.has(id)) return;
+  _saving.add(id);
+  const wasSaved = btn?.classList.contains('cas') || btn?.classList.contains('psa');
+  btn?.classList.toggle('cas', !wasSaved);
+  btn?.classList.toggle('psa', !wasSaved);
+  try {
+    const pr = doc(db,'posts',id), ur = doc(db,'users',currentUser.uid);
+    await updateDoc(pr, { savedBy: wasSaved ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid) });
+    await updateDoc(ur, { savedPosts: wasSaved ? arrayRemove(id) : arrayUnion(id) });
+    toast(wasSaved ? 'সেভ সরানো হয়েছে' : 'সেভ হয়েছে! ✓');
+  } catch(e) {
+    btn?.classList.toggle('cas', wasSaved);
+    btn?.classList.toggle('psa', wasSaved);
+    toast('ত্রুটি হয়েছে','error');
+  } finally {
+    _saving.delete(id);
+  }
 };
 window.deletePost = async id => {
   if (!confirm('এই পোস্ট মুছে দেবেন?')) return;
-  await deleteDoc(doc(db,'posts',id)); toast('পোস্ট মুছে গেছে');
+  try {
+    const cmSnap = await getDocs(collection(db,'posts',id,'comments'));
+    await Promise.all(cmSnap.docs.map(d => deleteDoc(d.ref)));
+    await deleteDoc(doc(db,'posts',id));
+    toast('পোস্ট মুছে গেছে');
+  } catch(e) { toast('মুছতে পারা যায়নি','error'); }
 };
 
 // ── SEARCH ──
 window.filterByTag = tag => { openSearch(); setTimeout(()=>{ document.getElementById('srchTagSel').value=tag; runSearch(); },100); };
-window.handleSearch = e => {};
-window.applyFilters = () => {};
-window.clearFilters = () => {};
 
 let _srchType = '', _srchAllPosts = [], _srchLoaded = false;
 window.openSearch = async () => {
@@ -528,7 +570,7 @@ const _phoneticDict = {
   'shikkha':'শিক্ষা','shiksha':'শিক্ষা','biggyan':'বিজ্ঞান',
   'manush':'মানুষ','manob':'মানব','jibon':'জীবন','jiban':'জীবন',
   'shamai':'সমাজ','somaj':'সমাজ','desh':'দেশ',
-  'nari':'নারী','purush':'পুরুষ','shishu':'শিশু','tরুণ':'তরুণ','torun':'তরুণ',
+  'nari':'নারী','purush':'পুরুষ','shishu':'শিশু','tarun':'তরুণ','torun':'তরুণ',
   'uddiptta':'উদ্দীপ্ত','uddippt':'উদ্দীপ্ত','uddipat':'উদ্দীপ্ত',
   'sangha':'সংঘ','shongho':'সংঘ','community':'কমিউনিটি',
   'karjokom':'কার্যক্রম','karjokrom':'কার্যক্রম','activities':'কার্যক্রম',
@@ -718,13 +760,14 @@ function tagPickerRender(filter='') {
     : '') + (items || '<div class="tag-dd-empty">কোনো ট্যাগ নেই</div>');
   dd.style.display = 'block';
 }
+const _debouncedTagRender = debounce(val => tagPickerRender(val), 180);
 window.tagPickerOpen = async () => {
   await loadTags();
   tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
 };
 window.tagPickerSearch = async (val) => {
   await loadTags();
-  tagPickerRender(val);
+  _debouncedTagRender(val);
 };
 window.tagPickerToggle = async () => {
   const dd = document.getElementById('tagDropdown');
@@ -748,6 +791,7 @@ window.tagPickerCreate = async (t) => {
   document.getElementById('tagSearchInp').value = '';
   tagPickerRenderChips();
   tagPickerRender('');
+  _srchLoaded = false; // new tag — invalidate search cache
 };
 function tagPickerRenderChips() {
   const row = document.getElementById('tagChips');
@@ -764,8 +808,7 @@ document.addEventListener('click', e => {
     if (dd) dd.style.display = 'none';
   }
 });
-function parseTags(str) {
-  // Now reads from _selectedTags directly, str param kept for compat
+function parseTags() {
   return [..._selectedTags].slice(0,5);
 }
 
@@ -778,35 +821,49 @@ window.submitPost = async () => {
   const dateVal = document.getElementById('pdate').value;
   if (!title) { toast('শিরোনাম দিন','error'); return; }
   const btn = document.getElementById('submitBtn');
-  btn.disabled=true; btn.textContent='প্রকাশ হচ্ছে…';
-  const createdAt = dateVal ? Timestamp.fromDate(new Date(dateVal)) : serverTimestamp();
-  const tags = parseTags();
-  // Upload a single file to Firebase Storage, return download URL
-  const uploadImg = async file => {
-    try {
-      const fd=new FormData(); fd.append('image',file);
-      const res=await fetch('https://api.imgur.com/3/image',{method:'POST',headers:{Authorization:'Client-ID 546c25a59c58ad7'},body:fd});
-      const d=await res.json(); return d.success?d.data.link:'';
-    } catch(e){return'';}
-  };
-  btn.textContent='ছবি আপলোড হচ্ছে…';
-  const urls = imgFiles.length ? (await Promise.all(imgFiles.map(uploadImg))).filter(Boolean) : [];
-  btn.textContent='সেভ হচ্ছে…';
-  await addDoc(collection(db,'posts'),{
-    title, body, type, tags, imageUrl:urls[0]||'', images:urls.slice(1),
-    authorId:currentUser.uid, authorName:currentUser.displayName,
-    authorPhoto:currentUser.photoURL, authorRole:currentRole,
-    createdAt, likeCount:0, commentCount:0, viewCount:0, likes:[], savedBy:[]
-  });
-  btn.disabled=false; btn.textContent='প্রকাশ করুন';
-  closeModal('createModal');
-  ['ptitle','pbody','pdate'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('pimg').value='';
-  document.getElementById('imgPrev').innerHTML='';
-  tagPickerReset();
-  document.getElementById('tagSearchInp').value='';
-  toast('প্রকাশিত হয়েছে! بارك الله فيك');
-  _srchLoaded = false; // invalidate search cache
+  btn.disabled = true; btn.textContent = 'প্রকাশ হচ্ছে…';
+  try {
+    const createdAt = dateVal ? Timestamp.fromDate(new Date(dateVal)) : serverTimestamp();
+    const tags = parseTags();
+    const IMGBB_KEY = 'dfe17afe0b40c898b7354609b37f1d41';
+    const uploadImg = async file => {
+      try {
+        const base64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        const fd = new FormData();
+        fd.append('key', IMGBB_KEY);
+        fd.append('image', base64);
+        const resp = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body:fd });
+        const d = await resp.json();
+        return d.success ? d.data.url : '';
+      } catch(e) { console.error('Upload failed:', e); return ''; }
+    };
+    btn.textContent = 'ছবি আপলোড হচ্ছে…';
+    const urls = imgFiles.length ? (await Promise.all(imgFiles.map(uploadImg))).filter(Boolean) : [];
+    btn.textContent = 'সেভ হচ্ছে…';
+    await addDoc(collection(db,'posts'), {
+      title, body, type, tags, imageUrl:urls[0]||'', images:urls.slice(1),
+      authorId:currentUser.uid, authorName:currentUser.displayName,
+      authorPhoto:currentUser.photoURL, authorRole:currentRole,
+      createdAt, likeCount:0, commentCount:0, viewCount:0, likes:[], savedBy:[]
+    });
+    closeModal('createModal');
+    ['ptitle','pbody','pdate'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('pimg').value = '';
+    document.getElementById('imgPrev').innerHTML = '';
+    tagPickerReset();
+    document.getElementById('tagSearchInp').value = '';
+    toast('প্রকাশিত হয়েছে! بارك الله فيك');
+    _srchLoaded = false;
+  } catch(e) {
+    toast('প্রকাশ করা যায়নি: ' + (e.message||'অজানা ত্রুটি'), 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'প্রকাশ করুন';
+  }
 };
 
 window.prevImgs = inp => {
@@ -884,8 +941,11 @@ window.swTab=(btn,id)=>{
   btn.classList.add('active'); document.getElementById(id)?.classList.add('active');
 };
 window.loadMembers = async () => {
-  const snap=await getDocs(collection(db,'users'));
-  allMembers=snap.docs.map(d=>d.data()); renderMembers(allMembers);
+  if (_membersLoaded) { renderMembers(allMembers); return; }
+  const snap = await getDocs(collection(db,'users'));
+  allMembers = snap.docs.map(d => d.data());
+  _membersLoaded = true;
+  renderMembers(allMembers);
 };
 window.renderMembers = members => {
   const list=document.getElementById('mlist'); if(!list)return;
@@ -907,24 +967,33 @@ window.renderMembers = members => {
 };
 window.filterM=v=>renderMembers(allMembers.filter(m=>(m.name||'').toLowerCase().includes(v.toLowerCase())||(m.email||'').toLowerCase().includes(v.toLowerCase())));
 window.filterR=(btn,role)=>{document.querySelectorAll('.rf').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMembers(role==='all'?allMembers:allMembers.filter(m=>m.role===role));};
-window.setRole=async(uid,role,btn)=>{
-  await updateDoc(doc(db,'users',uid),{role});
-  const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
-  const row=btn.closest('.mrow');
-  row.querySelectorAll('.rb').forEach(b=>b.classList.remove('rba'));btn.classList.add('rba');
-  const badge=row.querySelector('.role-badge');
-  badge.textContent=role; badge.style.cssText=`background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}40`;
-  allMembers=allMembers.map(m=>m.uid===uid?{...m,role}:m); toast(`ভূমিকা → ${role}`);
+window.setRole = async (uid, role, btn) => {
+  try {
+    await updateDoc(doc(db,'users',uid), {role});
+    const rc = {maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+    const row = btn.closest('.mrow');
+    row.querySelectorAll('.rb').forEach(b => b.classList.remove('rba')); btn.classList.add('rba');
+    const badge = row.querySelector('.role-badge');
+    badge.textContent = role; badge.style.cssText = `background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}40`;
+    allMembers = allMembers.map(m => m.uid===uid ? {...m,role} : m);
+    toast(`ভূমিকা → ${role}`);
+  } catch(e) { toast('ভূমিকা পরিবর্তন ব্যর্থ হয়েছে','error'); }
 };
 
 // ── UTILS ──
-window.closeModal=id=>{document.getElementById(id).style.display='none';};
-window.closeAllModals=()=>['postModal','createModal','profileModal'].forEach(id=>document.getElementById(id).style.display='none');
+window.closeModal = id => {
+  document.getElementById(id).style.display = 'none';
+  if (id === 'postModal' && _unsubCmList) { _unsubCmList(); _unsubCmList = null; }
+};
+window.closeAllModals = () => {
+  ['postModal','createModal','profileModal'].forEach(id => document.getElementById(id).style.display = 'none');
+  if (_unsubCmList) { _unsubCmList(); _unsubCmList = null; }
+};
 window.toast=(msg,type='success')=>{
   const t=document.getElementById('toast');t.textContent=msg;
   t.className='toast show '+type;setTimeout(()=>t.classList.remove('show'),3000);
 };
-window.addEventListener('load',()=>loadPosts('recent'));
+window.addEventListener('load', () => loadPosts('recent'));
 
 // LIGHTBOX
 let _lbImgs = [], _lbIdx = 0;
@@ -946,6 +1015,7 @@ window.lbPrev = () => { _lbIdx = (_lbIdx - 1 + _lbImgs.length) % _lbImgs.length;
 window.lbNext = () => { _lbIdx = (_lbIdx + 1) % _lbImgs.length; renderLightbox(); };
 window.closeLightbox = () => { document.getElementById('lightbox').style.display = 'none'; };
 document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openSearch(); return; }
   const lb = document.getElementById('lightbox');
   if (lb && lb.style.display === 'flex') {
     if (e.key === 'ArrowLeft') lbPrev();
@@ -1110,6 +1180,7 @@ main{max-width:1200px;margin:0 auto;padding:1.6rem 1.5rem;}
 /* Image area — portrait ratio like Facebook/IG posts */
 .card-img-wrap{display:grid;grid-template-columns:2fr 1fr;gap:2px;background:var(--bg);aspect-ratio:4/3;overflow:hidden;border-radius:0;}
 .card-img-wrap.ci-single{grid-template-columns:1fr;aspect-ratio:16/9;}
+.card-img-wrap.ci-equal{grid-template-columns:1fr 1fr;}
 .ci-full{background-size:cover;background-position:center;width:100%;height:100%;}
 .ci-main{background-size:cover;background-position:center;height:100%;}
 .ci-side{display:flex;flex-direction:column;gap:2px;height:100%;}
@@ -1448,7 +1519,7 @@ footer p{color:var(--txt2);font-size:.75rem;}
     <div class="srch-hd">
       <div class="srch-input-wrap">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input id="srchMain" placeholder="খুঁজুন… (বাংলা বা Banglish — 'iftar', 'dawah', 'amar nam')" oninput="runSearch()" autofocus/>
+        <input id="srchMain" placeholder="খুঁজুন… (বাংলা বা Banglish — 'iftar', 'dawah', 'amar nam')" oninput="clearTimeout(window._srchT);window._srchT=setTimeout(runSearch,220)" autofocus/>
         <button class="srch-clr-btn" id="srchClrBtn" onclick="clearSearch()" style="display:none">✕</button>
       </div>
       <button class="srch-close-btn" onclick="closeSearch()">✕</button>
@@ -1504,15 +1575,6 @@ footer p{color:var(--txt2);font-size:.75rem;}
   <button onclick="closeLightbox()" style="position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1rem;">✕</button>
 </div>
 
-<script>
-// Update section title on tab change
-const _origLoad = window.loadPosts;
-window.loadPosts = function(page) {
-  _origLoad(page);
-  const titles = {recent:'সাম্প্রতিক · This Month', blog:'কার্যক্রম · Activities', guideline:'নির্দেশিকা · Guidelines'};
-  const st = document.getElementById('sectionTitle');
-  if (st) st.textContent = titles[page]||'Posts';
-};
-</script>
+
 </body>
 </html>
