@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>উদ্দীপ্ত তরুণ সংঘ</title>
-<link rel="icon" type="image/jpeg" href="logo.jpeg"/>
+<link rel="icon" type="image/jpeg" href="https://i.ibb.co.com/wFHMC4Km/logo.jpg"/>
 <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Hind+Siliguri:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -75,8 +75,55 @@ function updatePostBtn() {
   const b = document.getElementById('newPostBtn');
   if (b) b.style.display = canPost() ? 'flex' : 'none';
 }
-function canPost() { return ['maintainer','admin','worker'].includes(currentRole); }
-function canDelete(p) { return currentUser && (currentRole==='maintainer'||currentRole==='admin'||(currentRole==='worker'&&p.authorId===currentUser.uid)); }
+function isBlocked()       { return currentRole === 'blocked'; }
+function canPost()         { return ['maintainer','admin','worker'].includes(currentRole); }
+function canComment()      { return currentUser && !isBlocked(); }
+function canLikePost()     { return currentUser && !isBlocked(); }
+function canPinComment()   { return ['maintainer','admin'].includes(currentRole); }
+function canDeleteComment(c) {
+  if (!currentUser || isBlocked()) return false;
+  if (['maintainer','admin'].includes(currentRole)) return true;
+  // worker and user can delete their own comments
+  return (currentRole === 'worker' || currentRole === 'user') && c.authorId === currentUser.uid;
+}
+function canReportComment(){ return !!currentUser; } // all roles including blocked
+// post delete: maintainer+admin full, worker own-only only, user ❌
+function canDelete(p)      { return currentUser && (currentRole==='maintainer'||currentRole==='admin'||(currentRole==='worker'&&p.authorId===currentUser.uid)); }
+
+// ── CLOSE FLOATING COMMENT BOX (must be window-scoped so inline onclick can reach it) ──
+window.closeCbBox = () => {
+  if (_unsubCbList) { _unsubCbList(); _unsubCbList = null; }
+  document.getElementById('commentBox').style.display = 'none';
+};
+
+// ── SHARED COMMENT RENDERER ──
+// context: 'cb' (floating box) | 'cm' (modal)
+function renderCommentItem(c, cid, pid, context) {
+  const setReplyFn = context === 'cb' ? 'cbSetReply' : 'cmSetReply';
+  const pinnedBadge = c.pinned ? `<span class="cm-pin-badge">📌</span>` : '';
+  const replyRef   = c.replyTo ? `<span class="reply-ref">↩ ${esc(c.replyTo)}</span>` : '';
+  const acts = [];
+  if (canComment())      acts.push(`<button class="cm-act reply-btn" title="রিপ্লাই" onclick="${setReplyFn}('${esc(c.authorName||'')}')">↩</button>`);
+  if (canPinComment())   acts.push(`<button class="cm-act cm-pin ${c.pinned?'cm-pinned':''}" title="${c.pinned?'আনপিন':'পিন'}" onclick="togglePinComment('${pid}','${cid}',${!!c.pinned})">📌</button>`);
+  if (canDeleteComment(c)) acts.push(`<button class="cm-act cm-del" title="মুছুন" onclick="deleteComment('${pid}','${cid}')">🗑</button>`);
+  if (canReportComment()) acts.push(`<button class="cm-act cm-rep" title="রিপোর্ট" onclick="reportComment('${pid}','${cid}')">⚑</button>`);
+  return `<div class="cmi${c.pinned?' cmi-pinned':''}" id="cmi-${cid}">
+    <img src="${esc(c.authorPhoto||'')}" onerror="this.style.display='none'"/>
+    <div style="width:100%">
+      <div class="cmi-top">
+        <span>${pinnedBadge}<strong>${esc(c.authorName||'')}</strong><span class="cmt"> ${tAgo(c.createdAt)}</span></span>
+        <div class="cmi-acts">${acts.join('')}</div>
+      </div>
+      ${replyRef}<p>${esc(c.text||'')}</p>
+    </div></div>`;
+}
+
+// Sort pinned comments to top, preserve time order within each group
+function sortComments(docs) {
+  const pinned = docs.filter(d => d.data().pinned);
+  const rest   = docs.filter(d => !d.data().pinned);
+  return [...pinned, ...rest];
+}
 
 // ── TAGS ──
 async function loadTags(force = false) {
@@ -207,16 +254,15 @@ function cardHtml(p) {
     </div>
     <div class="cact" onclick="event.stopPropagation()">
       <button class="ca ${liked?'cal':''}" onclick="toggleLike('${p.id}',this)">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
-        like${p.likeCount?' '+p.likeCount:''}
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+        ${p.likeCount?`<span>${p.likeCount}</span>`:''}
       </button>
       <button class="ca" onclick="openComments('${p.id}')">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        comment${p.commentCount?' '+p.commentCount:''}
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        ${p.commentCount?`<span>${p.commentCount}</span>`:''}
       </button>
       <button class="ca ${saved?'cas':''}" onclick="toggleSave('${p.id}',this)">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-        save
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
       </button>
       ${canDelete(p)?`<button class="ca ca-del" onclick="deletePost('${p.id}')">✕</button>`:''}
     </div>
@@ -225,6 +271,11 @@ function cardHtml(p) {
 
 // ── OPEN POST (full view) ──
 window.openPost = async (id) => {
+  // Always re-fetch current user's role to ensure it's up to date
+  if (currentUser) {
+    const uSnap = await getDoc(doc(db,'users',currentUser.uid));
+    if (uSnap.exists()) currentRole = uSnap.data().role || 'user';
+  }
   const snap = await getDoc(doc(db,'posts',id));
   if (!snap.exists()) return;
   const p = {id,...snap.data()};
@@ -289,42 +340,38 @@ window.openPost = async (id) => {
 
 // ── FLOATING COMMENT BOX ──
 window.openComments = async (id) => {
+  // Always re-fetch current user's role to ensure it's up to date
+  if (currentUser) {
+    const uSnap = await getDoc(doc(db,'users',currentUser.uid));
+    if (uSnap.exists()) currentRole = uSnap.data().role || 'user';
+  }
   const snap = await getDoc(doc(db,'posts',id));
   if (!snap.exists()) return;
   const p = snap.data();
   const box = document.getElementById('commentBox');
+  const formHtml = canComment()
+    ? `<div class="cb-form">
+         <img src="${esc(currentUser.photoURL||'')}" onerror="this.style.display='none'"/>
+         <input id="cbInput" placeholder="মন্তব্য লিখুন…" onkeydown="if(event.key==='Enter')cbPostComment('${id}')"/>
+         <button onclick="cbPostComment('${id}')">→</button>
+       </div>`
+    : currentUser
+      ? '<p class="cmt-h cmt-blocked">🚫 আপনি ব্লক আছেন</p>'
+      : '<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>';
   box.innerHTML = `
     <div class="cb-header">
       <span>💬 ${esc(p.title||'Comments')}</span>
-      <button onclick="if(_unsubCbList){_unsubCbList();_unsubCbList=null;}document.getElementById('commentBox').style.display='none'">✕</button>
+      <button class="cb-close-btn" onclick="closeCbBox()" title="বন্ধ করুন">✕</button>
     </div>
     <div class="cb-list" id="cbList"></div>
-    ${currentUser
-      ?`<div class="cb-form">
-          <img src="${esc(currentUser.photoURL||'')}" onerror="this.style.display='none'"/>
-          <input id="cbInput" placeholder="মন্তব্য লিখুন…" onkeydown="if(event.key==='Enter')cbPostComment('${id}')"/>
-          <button onclick="cbPostComment('${id}')">→</button>
-        </div>`
-      :'<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>'}`;
+    ${formHtml}`;
   box.style.display = 'flex';
   if (_unsubCbList) { _unsubCbList(); _unsubCbList = null; }
   _unsubCbList = onSnapshot(query(collection(db,'posts',id,'comments'), orderBy('createdAt','asc')), snap => {
     const list = document.getElementById('cbList');
     if (!list) return;
     if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
-    list.innerHTML = snap.docs.map(d => {
-      const c = d.data(); const cid = d.id;
-      const replyTo = c.replyTo ? `<span class="reply-ref">↩ ${esc(c.replyTo)}</span>` : '';
-      return `<div class="cmi" id="cmi-${cid}">
-        <img src="${esc(c.authorPhoto||'')}" onerror="this.style.display='none'"/>
-        <div style="width:100%">
-          <div style="display:flex;align-items:center;justify-content:space-between;">
-            <span><strong>${esc(c.authorName||'')}</strong><span class="cmt"> ${tAgo(c.createdAt)}</span></span>
-            ${currentUser?`<button class="reply-btn" onclick="cbSetReply('${esc(c.authorName||'')}')">↩</button>`:''}
-          </div>
-          ${replyTo}<p>${esc(c.text||'')}</p>
-        </div></div>`;
-    }).join('');
+    list.innerHTML = sortComments(snap.docs).map(d => renderCommentItem(d.data(), d.id, id, 'cb')).join('');
     list.scrollTop = list.scrollHeight;
   });
 };
@@ -349,7 +396,7 @@ window.cbCancelReply = () => {
   if (inp) { inp.placeholder = 'মন্তব্য লিখুন…'; inp.value = ''; inp.focus(); }
 };
 window.cbPostComment = async (pid) => {
-  if (!currentUser) { toast('লগইন করুন', 'error'); return; }
+  if (!canComment()) { toast('আপনি ব্লক আছেন','error'); return; }
   const inp = document.getElementById('cbInput');
   const txt = inp?.value?.trim(); if (!txt) return;
   const replyTo = _cbReplyTo; cbCancelReply();
@@ -367,25 +414,45 @@ window.cbPostComment = async (pid) => {
   }
 };
 
+// ── COMMENT ACTIONS ──
+window.togglePinComment = async (pid, cid, isPinned) => {
+  if (!canPinComment()) return;
+  try {
+    await updateDoc(doc(db,'posts',pid,'comments',cid), { pinned: !isPinned });
+    toast(isPinned ? 'পিন সরানো হয়েছে' : '📌 পিন করা হয়েছে');
+  } catch(e) { toast('পিন করা যায়নি','error'); }
+};
+
+window.deleteComment = async (pid, cid) => {
+  if (!currentUser) return;
+  if (!confirm('এই মন্তব্য মুছে দেবেন?')) return;
+  try {
+    await deleteDoc(doc(db,'posts',pid,'comments',cid));
+    await updateDoc(doc(db,'posts',pid), { commentCount: increment(-1) });
+    toast('মন্তব্য মুছে গেছে');
+  } catch(e) { toast('মুছতে পারা যায়নি','error'); }
+};
+
+window.reportComment = async (pid, cid) => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  if (!confirm('এই মন্তব্যটি রিপোর্ট করবেন?')) return;
+  try {
+    await addDoc(collection(db,'reports'), {
+      type: 'comment', pid, cid,
+      reportedBy: currentUser.uid,
+      reportedAt: serverTimestamp()
+    });
+    toast('রিপোর্ট পাঠানো হয়েছে ✓');
+  } catch(e) { toast('রিপোর্ট করা যায়নি','error'); }
+};
+
 window.loadComments = pid => {
   const list = document.getElementById('cmList'); if (!list) return;
   if (_unsubCmList) { _unsubCmList(); _unsubCmList = null; }
   _unsubCmList = onSnapshot(query(collection(db,'posts',pid,'comments'), orderBy('createdAt','asc')), snap => {
     if (!document.getElementById('cmList')) return;
     if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
-    list.innerHTML = snap.docs.map(d => {
-      const c = d.data(); const cid = d.id;
-      const replyTo = c.replyTo ? `<span class="reply-ref">↩ ${esc(c.replyTo)}</span>` : '';
-      return `<div class="cmi" id="cmi-${cid}">
-        <img src="${esc(c.authorPhoto||'')}" onerror="this.style.display='none'"/>
-        <div style="width:100%">
-          <div style="display:flex;align-items:center;justify-content:space-between;">
-            <span><strong>${esc(c.authorName||'')}</strong><span class="cmt"> ${tAgo(c.createdAt)}</span></span>
-            ${currentUser?`<button class="reply-btn" onclick="cmSetReply('${esc(c.authorName||'')}')">↩</button>`:''}
-          </div>
-          ${replyTo}<p>${esc(c.text||'')}</p>
-        </div></div>`;
-    }).join('');
+    list.innerHTML = sortComments(snap.docs).map(d => renderCommentItem(d.data(), d.id, pid, 'cm')).join('');
   });
 };
 
@@ -410,7 +477,7 @@ window.cmCancelReply = () => {
   if (inp) { inp.placeholder = 'মন্তব্য লিখুন…'; inp.value = ''; inp.focus(); }
 };
 window.postComment = async pid => {
-  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  if (!canComment()) { toast(currentUser ? 'আপনি ব্লক আছেন' : 'লগইন করুন','error'); return; }
   const inp = document.getElementById('cmIn');
   const txt = inp?.value?.trim(); if (!txt) return;
   const replyTo = _cmReplyTo; cmCancelReply();
@@ -431,6 +498,7 @@ window.postComment = async pid => {
 // ── LIKES & SAVES ──
 window.toggleLike = async (id, btn) => {
   if (!currentUser) { toast('লাইক দিতে লগইন করুন','error'); return; }
+  if (isBlocked()) { toast('আপনি ব্লক আছেন','error'); return; }
   if (_liking.has(id)) return;
   _liking.add(id);
   const wasLiked = btn?.classList.contains('cal') || btn?.classList.contains('pla');
@@ -470,6 +538,12 @@ window.toggleSave = async (id, btn) => {
   }
 };
 window.deletePost = async id => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  // Fetch post to verify ownership for workers
+  const pSnap = await getDoc(doc(db,'posts',id));
+  if (!pSnap.exists()) { toast('পোস্ট পাওয়া যায়নি','error'); return; }
+  const pData = pSnap.data();
+  if (!canDelete({...pData, id})) { toast('আপনার অনুমতি নেই','error'); return; }
   if (!confirm('এই পোস্ট মুছে দেবেন?')) return;
   try {
     const cmSnap = await getDocs(collection(db,'posts',id,'comments'));
@@ -905,6 +979,7 @@ window.openProfile = async () => {
       <div class="ptabs">
         <button class="ptab active" onclick="swTab(this,'ts')">💾 সেভ</button>
         ${canManage?`<button class="ptab" onclick="swTab(this,'tm')">👥 সদস্য</button>`:''}
+        ${canManage?`<button class="ptab" onclick="swTab(this,'trp');loadReports()">🚨 রিপোর্ট</button>`:''}
         <button class="ptab" onclick="swTab(this,'tset')">⚙️ সেটিংস</button>
       </div>
       <div id="ts" class="tc active"><p class="tab-lbl">সেভ করা পোস্ট</p>${savedHtml}</div>
@@ -919,6 +994,10 @@ window.openProfile = async () => {
           <button class="rf" onclick="filterR(this,'user')">User</button>
         </div>
         <div id="mlist"><p class="cmt-h">লোড হচ্ছে…</p></div>
+      </div>`:''}
+      ${canManage?`<div id="trp" class="tc">
+        <p class="tab-lbl">রিপোর্টকৃত মন্তব্য · Reported Comments</p>
+        <div id="rplist"><p class="cmt-h">লোড হচ্ছে…</p></div>
       </div>`:''}
       <div id="tset" class="tc">
         <p class="tab-lbl">অ্যাকাউন্ট</p>
@@ -950,13 +1029,15 @@ window.loadMembers = async () => {
 window.renderMembers = members => {
   const list=document.getElementById('mlist'); if(!list)return;
   const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
-  const canP=currentRole==='maintainer', canA=canP||currentRole==='admin';
+  const canP=currentRole==='maintainer', canA=currentRole==='admin';
   list.innerHTML=`<div class="mstats">
     <div class="msc">মোট <strong>${allMembers.length}</strong></div>
-    ${['maintainer','admin','worker','user'].map(r=>`<div class="msc">${r} <strong>${allMembers.filter(m=>m.role===r).length}</strong></div>`).join('')}
+    ${['maintainer','admin','worker','user','blocked'].map(r=>`<div class="msc">${r} <strong>${allMembers.filter(m=>m.role===r).length}</strong></div>`).join('')}
   </div>`+members.map(m=>{
     const ini=(m.name||'?').split(' ').map(c=>c[0]).join('').toUpperCase().slice(0,2);
-    const roles=canP?['maintainer','admin','worker','user']:canA?['admin','worker','user']:[];
+    // Chart: maintainer can assign maintainer/admin/worker/user/blocked (5 checks)
+    // admin can assign admin/worker/user (3 checks), NOT maintainer or blocked
+    const roles=canP?['maintainer','admin','worker','user','blocked']:canA?['admin','worker','user']:[];
     return`<div class="mrow">
       <div class="mav" style="background:${rc[m.role||'user']}25;color:${rc[m.role||'user']}">${ini}</div>
       <div class="minf"><strong>${esc(m.name||'')}${m.uid===currentUser?.uid?' <span class="you">আপনি</span>':''}</strong><small>${esc(m.email||'')}</small></div>
@@ -967,6 +1048,111 @@ window.renderMembers = members => {
 };
 window.filterM=v=>renderMembers(allMembers.filter(m=>(m.name||'').toLowerCase().includes(v.toLowerCase())||(m.email||'').toLowerCase().includes(v.toLowerCase())));
 window.filterR=(btn,role)=>{document.querySelectorAll('.rf').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMembers(role==='all'?allMembers:allMembers.filter(m=>m.role===role));};
+
+window.loadReports = async () => {
+  const list = document.getElementById('rplist'); if (!list) return;
+  list.innerHTML = '<p class="cmt-h">লোড হচ্ছে…</p>';
+  try {
+    const snap = await getDocs(query(collection(db,'reports'), orderBy('reportedAt','desc')));
+    if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো রিপোর্ট নেই ✓</p>'; return; }
+    const items = await Promise.all(snap.docs.map(async d => {
+      const r = {id:d.id, ...d.data()};
+      // Use cached comment text/author from report if available, otherwise fetch live
+      let commentText = r.commentText||'', commentAuthor = r.commentAuthor||'', commentPhoto = r.commentPhoto||'', authorId = r.authorId||'';
+      if (!commentAuthor && r.pid && r.cid) {
+        try {
+          const cmSnap = await getDoc(doc(db,'posts',r.pid,'comments',r.cid));
+          if (cmSnap.exists()) { const cd=cmSnap.data(); commentText=cd.text||''; commentAuthor=cd.authorName||''; commentPhoto=cd.authorPhoto||''; authorId=cd.authorId||''; }
+        } catch(e) {}
+      }
+      let reporterName='', isBlockedUser=false;
+      try { const rs=await getDoc(doc(db,'users',r.reportedBy)); if(rs.exists()) reporterName=rs.data().name||''; } catch(e) {}
+      if (authorId) { try { const us=await getDoc(doc(db,'users',authorId)); if(us.exists()) isBlockedUser=us.data().role==='blocked'; } catch(e) {} }
+      return {r, commentText, commentAuthor, commentPhoto, authorId, reporterName, isBlockedUser};
+    }));
+    const pending = items.filter(i=>!i.r.resolved);
+    const resolved = items.filter(i=>i.r.resolved);
+    const renderItem = ({r,commentText,commentAuthor,commentPhoto,authorId,reporterName,isBlockedUser}) => {
+      const isResolved = !!r.resolved;
+      const resolvedBadge = isResolved ? `<span class="rp-resolved-badge">✓ ${esc(r.resolvedAction||'সমাধান হয়েছে')}</span>` : '';
+      return `<div class="rp-row${isResolved?' rp-resolved':''}" id="rprow-${r.id}">
+        <div class="rp-comment">
+          <img src="${esc(commentPhoto)}" onerror="this.style.display='none'" class="rp-av"/>
+          <div class="rp-body">
+            <div class="rp-author">${esc(commentAuthor||'অজানা')}${isBlockedUser?' <span class="rp-blocked-badge">🚫 blocked</span>':''}${resolvedBadge}</div>
+            <div class="rp-text">${commentText?esc(commentText):'<em style="opacity:.6">মন্তব্য মুছে গেছে</em>'}</div>
+            <div class="rp-meta">রিপোর্ট: <strong>${esc(reporterName||r.reportedBy||'')}</strong> · ${tAgo(r.reportedAt)}</div>
+          </div>
+        </div>
+        ${!isResolved?`<div class="rp-actions">
+          ${commentText?`<button class="rp-btn rp-del" title="মন্তব্য মুছুন" onclick="reportDeleteComment('${r.pid}','${r.cid}','${r.id}','${esc(commentText)}','${esc(commentAuthor)}','${esc(commentPhoto)}','${authorId}')">🗑</button>`:''}
+          ${authorId&&!isBlockedUser&&['admin','maintainer'].includes(currentRole)?`<button class="rp-btn rp-block" onclick="reportBlockUser('${authorId}','${r.id}','${esc(commentText)}','${esc(commentAuthor)}','${esc(commentPhoto)}')">🚫 ব্লক</button>`:''}
+          ${authorId&&isBlockedUser&&['admin','maintainer'].includes(currentRole)?`<button class="rp-btn rp-unblock" onclick="reportUnblockUser('${authorId}','${r.id}')">✅ আনব্লক</button>`:''}
+        </div>`:''}
+      </div>`;
+    };
+    let html = '';
+    if (pending.length) html += `<div class="rp-section-lbl">⏳ অপেক্ষমাণ (${pending.length})</div>` + pending.map(renderItem).join('');
+    if (resolved.length) html += `<div class="rp-section-lbl rp-section-resolved">✓ সমাধান হয়েছে (${resolved.length})</div>` + resolved.map(renderItem).join('');
+    list.innerHTML = html || '<p class="cmt-h">কোনো রিপোর্ট নেই ✓</p>';
+  } catch(e) { list.innerHTML = '<p class="cmt-h" style="color:var(--red)">লোড করা যায়নি</p>'; console.error(e); }
+};
+
+window.reportDeleteComment = async (pid, cid, rid, commentText, commentAuthor, commentPhoto, authorId) => {
+  if (!confirm('এই মন্তব্য মুছে দেবেন?')) return;
+  try {
+    await deleteDoc(doc(db,'posts',pid,'comments',cid));
+    await updateDoc(doc(db,'posts',pid),{commentCount:increment(-1)});
+    // Mark report as resolved, cache comment info so history is preserved
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'মন্তব্য মুছে দেওয়া হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp(),
+      commentText, commentAuthor, commentPhoto, authorId
+    });
+    toast('মন্তব্য মুছে গেছে');
+    loadReports();
+  } catch(e) { toast('মুছতে পারা যায়নি','error'); }
+};
+window.reportBlockUser = async (uid, rid, commentText, commentAuthor, commentPhoto) => {
+  if (!['admin','maintainer'].includes(currentRole)) { toast('অনুমতি নেই','error'); return; }
+  if (!confirm('এই ব্যবহারকারীকে ব্লক করবেন?')) return;
+  try {
+    await updateDoc(doc(db,'users',uid),{role:'blocked'});
+    allMembers=allMembers.map(m=>m.uid===uid?{...m,role:'blocked'}:m);
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'ব্যবহারকারী ব্লক করা হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp(),
+      commentText, commentAuthor, commentPhoto, authorId:uid
+    });
+    toast('ব্লক করা হয়েছে 🚫');
+    loadReports();
+  } catch(e) { toast('ব্লক করা যায়নি','error'); }
+};
+window.reportUnblockUser = async (uid, rid) => {
+  if (!['admin','maintainer'].includes(currentRole)) { toast('অনুমতি নেই','error'); return; }
+  if (!confirm('আনব্লক করবেন?')) return;
+  try {
+    await updateDoc(doc(db,'users',uid),{role:'user'});
+    allMembers=allMembers.map(m=>m.uid===uid?{...m,role:'user'}:m);
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'ব্যবহারকারী আনব্লক করা হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp()
+    });
+    toast('আনব্লক করা হয়েছে ✅');
+    loadReports();
+  } catch(e) { toast('আনব্লক করা যায়নি','error'); }
+};
+window.dismissReport = async rid => {
+  try {
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'বাতিল করা হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp()
+    });
+    toast('রিপোর্ট বাতিল করা হয়েছে');
+    loadReports();
+  } catch(e) { toast('বাতিল করা যায়নি','error'); }
+};
+
 window.setRole = async (uid, role, btn) => {
   try {
     await updateDoc(doc(db,'users',uid), {role});
@@ -1209,7 +1395,19 @@ main{max-width:1200px;margin:0 auto;padding:1.6rem 1.5rem;}
   #commentBox{left:0;right:0;bottom:0;width:100%;border-radius:14px 14px 0 0;max-height:70vh;}
 }
 .cb-header{display:flex;justify-content:space-between;align-items:center;padding:.7rem 1rem;border-bottom:1px solid var(--navy3);font-size:.85rem;font-weight:500;background:var(--navy3);}
-.cb-header button{background:none;border:none;color:rgba(255,255,255,.5);cursor:pointer;font-size:1rem;}
+.cb-close-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.75);cursor:pointer;font-size:.85rem;width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;}
+.cb-close-btn:hover{background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.35);}
+.cmi-top{display:flex;align-items:center;justify-content:space-between;gap:.3rem;}
+.cmi-acts{display:flex;gap:.15rem;align-items:center;flex-shrink:0;}
+.cm-act{background:none;border:none;cursor:pointer;font-size:.72rem;padding:.15rem .28rem;border-radius:5px;opacity:.55;transition:all .15s;line-height:1;}
+.cmi:hover .cm-act{opacity:.75;}
+.cm-act:hover{opacity:1 !important;background:rgba(255,255,255,.08);}
+.cm-pin.cm-pinned{opacity:.9 !important;}
+.cm-del:hover{background:rgba(192,57,43,.2) !important;color:#e74c3c;}
+.cm-rep:hover{background:rgba(224,120,32,.15) !important;color:var(--orange);}
+.cm-pin-badge{font-size:.7rem;margin-right:.2rem;vertical-align:middle;}
+.cmi-pinned{background:rgba(107,140,58,.1);border:1px solid rgba(107,140,58,.2);}
+.cmt-blocked{color:var(--red,#e74c3c)!important;}
 .cb-list{flex:1;overflow-y:auto;padding:.7rem;min-height:80px;max-height:320px;}
 .cb-form{display:flex;gap:.4rem;align-items:center;padding:.6rem;border-top:1px solid var(--navy3);}
 .cb-form img{width:26px;height:26px;border-radius:50%;object-fit:cover;flex-shrink:0;}
@@ -1363,11 +1561,33 @@ main{max-width:1200px;margin:0 auto;padding:1.6rem 1.5rem;}
 footer{background:var(--navy);border-top:1px solid var(--navy3);padding:1.25rem;text-align:center;}
 footer p{color:var(--txt2);font-size:.75rem;}
 
+.rp-section-lbl{font-size:.68rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;padding:.3rem .2rem .4rem;margin-top:.3rem;}
+.rp-section-resolved{color:var(--olive2);margin-top:.8rem;}
+.rp-resolved{opacity:.6;border-color:rgba(107,140,58,.2);}
+.rp-resolved .rp-text{background:rgba(0,0,0,.15);}
+.rp-resolved-badge{background:rgba(107,140,58,.2);color:var(--olive3);font-size:.6rem;padding:.08rem .38rem;border-radius:4px;font-weight:600;margin-left:.3rem;}
 /* TOAST */
 .toast{position:fixed;bottom:1.3rem;left:50%;transform:translateX(-50%) translateY(65px);background:var(--navy2);border:1px solid var(--navy3);border-radius:9px;padding:.48rem .95rem;font-size:.8rem;color:var(--txt);box-shadow:var(--sh);z-index:9999;transition:transform .27s ease;white-space:nowrap;}
 .toast.show{transform:translateX(-50%) translateY(0);}
 .toast.error{border-color:#e05c5c;color:#e05c5c;}
 .toast.success{border-color:var(--olive3);color:var(--olive3);}
+
+/* REPORTS PANEL */
+.rp-row{background:var(--navy3);border:1px solid rgba(255,255,255,.07);border-radius:9px;padding:.65rem .7rem;margin-bottom:.5rem;}
+.rp-comment{display:flex;gap:.55rem;margin-bottom:.55rem;}
+.rp-av{width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid var(--navy3);}
+.rp-body{flex:1;min-width:0;}
+.rp-author{font-size:.78rem;font-weight:600;color:var(--txt);margin-bottom:.18rem;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;}
+.rp-blocked-badge{background:rgba(192,57,43,.2);color:#e05c5c;font-size:.6rem;padding:.08rem .35rem;border-radius:4px;font-weight:600;}
+.rp-text{font-size:.8rem;color:var(--txt2);line-height:1.5;background:rgba(0,0,0,.25);border-radius:6px;padding:.35rem .5rem;margin-bottom:.25rem;word-break:break-word;}
+.rp-meta{font-size:.66rem;color:var(--txt2);}
+.rp-actions{display:flex;gap:.3rem;flex-wrap:wrap;}
+.rp-btn{background:var(--navy2);border:1px solid rgba(255,255,255,.1);color:var(--txt2);padding:.25rem .6rem;border-radius:6px;cursor:pointer;font-size:.72rem;font-family:inherit;transition:all .17s;}
+.rp-btn:hover{color:#fff;border-color:rgba(255,255,255,.3);}
+.rp-del:hover{background:rgba(192,57,43,.2);color:#e05c5c;border-color:#c0392b40;}
+.rp-block:hover{background:rgba(192,57,43,.15);color:#e05c5c;border-color:#c0392b40;}
+.rp-unblock:hover{background:rgba(107,140,58,.15);color:var(--olive3);border-color:var(--olive);}
+.rp-dismiss:hover{background:rgba(107,140,58,.1);color:var(--olive3);}
 </style>
 </head>
 <body>
@@ -1375,7 +1595,7 @@ footer p{color:var(--txt2);font-size:.75rem;}
 <!-- NAV -->
 <nav>
   <a href="#" class="nav-logo">
-    <img src="logo.jpeg" alt="উদ্দীপ্ত তরুণ সংঘ" onerror="this.style.display='none'"/>
+    <img src="https://i.ibb.co.com/wFHMC4Km/logo.jpg" alt="উদ্দীপ্ত তরুণ সংঘ" onerror="this.style.display='none'"/>
     <div class="nav-logo-text">
       <strong>উদ্দীপ্ত তরুণ সংঘ</strong>
       <em>DAWAH COMMUNITY</em>
@@ -1407,7 +1627,7 @@ footer p{color:var(--txt2);font-size:.75rem;}
 
 <!-- HERO -->
 <div class="hero">
-  <img src="logo.jpeg" alt="Logo" class="hero-logo" onerror="this.style.display='none'"/>
+  <img src="https://i.ibb.co.com/wFHMC4Km/logo.jpg" alt="Logo" class="hero-logo" onerror="this.style.display='none'"/>
   <div class="hero-ar">ادعُ إِلىٰ سَبيلِ رَبِّكَ بِالحِكمَةِ</div>
   <h1>উদ্দীপ্ত তরুণ সংঘ</h1>
   <p>Invite to the way of your Lord with wisdom — knowledge, guidance &amp; brotherhood</p>
