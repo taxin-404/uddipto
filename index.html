@@ -34,6 +34,7 @@ let currentUser = null, currentRole = 'user', currentPage = 'recent';
 let unsubPosts = null, allMembers = [], allTags = [];
 let searchQuery = '', searchTag = '', searchMonth = '';
 let _tagsLoaded = false, _membersLoaded = false;
+let _tagColors = {}, _pendingNewTag = '';
 let _unsubCmList = null, _unsubCbList = null;
 const _liking = new Set(), _saving = new Set();
 
@@ -130,18 +131,20 @@ async function loadTags(force = false) {
   if (_tagsLoaded && !force) return;
   const snap = await getDocs(collection(db,'tags'));
   allTags = snap.docs.map(d => d.data().name).filter(Boolean);
+  snap.docs.forEach(d => { if (d.data().color) _tagColors[d.data().name] = d.data().color; });
   _tagsLoaded = true;
 }
-async function saveTag(name) {
+async function saveTag(name, color='') {
   const clean = name.trim().toLowerCase().replace(/\s+/g,'-');
   if (!clean || allTags.includes(clean)) return clean;
-  await setDoc(doc(db,'tags',clean), { name:clean, createdBy:currentUser.uid, createdAt:serverTimestamp() });
+  await setDoc(doc(db,'tags',clean), { name:clean, color:color||'', createdBy:currentUser.uid, createdAt:serverTimestamp() });
   allTags.push(clean);
+  if (color) _tagColors[clean] = color;
   return clean;
 }
 
 // ── LOAD POSTS ──
-window.loadPosts = (page = currentPage) => {
+window.loadPosts = async (page = currentPage) => {
   currentPage = page;
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
   const titleMap = { recent:'সাম্প্রতিক · This Month', blog:'কার্যক্রম · Activities', guideline:'নির্দেশিকা · Guidelines' };
@@ -151,6 +154,10 @@ window.loadPosts = (page = currentPage) => {
   const grid = document.getElementById('postsGrid');
   grid.innerHTML = Array(6).fill('<div class="shimmer"></div>').join('');
   if (unsubPosts) unsubPosts();
+
+  // Ensure tag colors are loaded before any card renders
+  await loadTags();
+
   unsubPosts = onSnapshot(query(collection(db,'posts'), orderBy('createdAt','desc')), snap => {
     let posts = snap.docs.map(d => ({id:d.id,...d.data()}));
     const now = new Date();
@@ -201,7 +208,7 @@ function cardHtml(p) {
   const allImgs = [p.imageUrl,...(p.images||[])].filter(Boolean);
   const hasText = !!(p.body||'').trim();
   const hasImgs = allImgs.length > 0;
-  const tagsHtml = (p.tags||[]).map(t=>`<span class="post-tag" onclick="event.stopPropagation();filterByTag('${esc(t)}')">#${esc(t)}</span>`).join('');
+  const tagsHtml = (p.tags||[]).map(t=>_tagHtml(t,`event.stopPropagation();filterByTag('${esc(t)}')`)).join('');
 
   // Image layout: 1=full, 2=big+small, 3+=big+small+blur/count
   let imgBlock = '';
@@ -290,7 +297,7 @@ window.openPost = async (id) => {
   const saved = currentUser&&(p.savedBy||[]).includes(currentUser.uid);
   const allImgs = [p.imageUrl,...(p.images||[])].filter(Boolean);
   const typeLabel = {blog:'কার্যক্রম',guideline:'নির্দেশিকা'}[p.type]||'কার্যক্রম';
-  const tagsHtml = (p.tags||[]).map(t=>`<span class="post-tag" onclick="filterByTag('${esc(t)}')">#${esc(t)}</span>`).join('');
+  const tagsHtml = (p.tags||[]).map(t=>_tagHtml(t,`filterByTag('${esc(t)}')`)).join('');
 
   // Store images globally so lightbox onclick can use index only (avoids JSON-in-HTML-attr issue)
   window._postImgs = allImgs;
@@ -554,7 +561,106 @@ window.deletePost = async id => {
 };
 
 // ── SEARCH ──
-window.filterByTag = tag => { openSearch(); setTimeout(()=>{ document.getElementById('srchTagSel').value=tag; runSearch(); },100); };
+window.filterByTag = tag => {
+  openSearch();
+  setTimeout(()=>{
+    if (tag && !window._srchTagVals.includes(tag)) {
+      window._srchTagVals.push(tag);
+      _updateSrchTagBtn();
+      _buildSrchTagDd();
+      runSearch();
+    }
+  }, 200);
+};
+
+// ── CUSTOM SEARCH DROPDOWNS ──
+window._srchTagVals = [];
+window._srchSortVal = 'newest';
+
+function _buildSrchTagDd() {
+  const dd = document.getElementById('srchTagDd');
+  if (!dd) return;
+  const none = window._srchTagVals.length === 0;
+  dd.innerHTML = `<div class="srch-dd-item srch-dd-clear${none?' srch-dd-active':''}" data-val="" onclick="setSrchTag('',this)">
+      ${none?'<span class="srch-dd-chk">✓</span>':'<span class="srch-dd-chk" style="opacity:0">✓</span>'}সব ট্যাগ
+    </div>`
+    + allTags.map(t => {
+        const c = _tagColors[t];
+        const dotStyle = c ? `background:${c};` : 'background:rgba(255,255,255,.25);';
+        const sel = window._srchTagVals.includes(t);
+        return `<div class="srch-dd-item${sel?' srch-dd-tag-sel':''}" data-val="${t}" onclick="setSrchTag('${t}',this)">
+          <span class="srch-dd-dot" style="${dotStyle}"></span>
+          <span style="flex:1;min-width:0;">#${t}</span>
+          <span class="srch-dd-chk" style="opacity:${sel?1:0}">✓</span>
+        </div>`;
+      }).join('');
+}
+
+function _updateSrchTagBtn() {
+  const btn = document.querySelector('#srchTagWrap .srch-custom-sel-btn');
+  if (!btn) return;
+  const vals = window._srchTagVals;
+  if (!vals.length) {
+    btn.innerHTML = `<span id="srchTagLabel">সব ট্যাগ</span><span class="srch-sel-arrow">▾</span>`;
+  } else {
+    const chips = vals.map(t => {
+      const c = _tagColors[t];
+      const sty = c ? `color:${c};background:${c}18;border-color:${c}44;` : '';
+      return `<span class="srch-tag-chip" style="${sty}">#${t}</span>`;
+    }).join('');
+    btn.innerHTML = `<span id="srchTagLabel" class="srch-tag-chips-wrap">${chips}</span><span class="srch-sel-arrow">▾</span>`;
+  }
+}
+
+window.setSrchTag = (val, el) => {
+  if (!val) {
+    window._srchTagVals = [];
+    const dd = document.getElementById('srchTagDd');
+    if (dd) dd.style.display = 'none';
+  } else {
+    const idx = window._srchTagVals.indexOf(val);
+    if (idx >= 0) window._srchTagVals.splice(idx, 1);
+    else window._srchTagVals.push(val);
+  }
+  _updateSrchTagBtn();
+  _buildSrchTagDd();
+  runSearch();
+};
+
+window.setSrchSort = (val, label, el) => {
+  window._srchSortVal = val;
+  const lbl = document.getElementById('srchSortLabel');
+  if (lbl) lbl.textContent = label;
+  document.querySelectorAll('#srchSortDd .srch-dd-item').forEach(i=>i.classList.toggle('srch-dd-active', i.dataset.val===val));
+  const dd = document.getElementById('srchSortDd');
+  if (dd) dd.style.display = 'none';
+  runSearch();
+};
+
+window.toggleSrchDd = (which, e) => {
+  if (e) e.stopPropagation();
+  const tagDd = document.getElementById('srchTagDd');
+  const sortDd = document.getElementById('srchSortDd');
+  if (which === 'tag') {
+    const open = tagDd.style.display !== 'none';
+    tagDd.style.display = open ? 'none' : 'block';
+    if (sortDd) sortDd.style.display = 'none';
+  } else {
+    const open = sortDd.style.display !== 'none';
+    sortDd.style.display = open ? 'none' : 'block';
+    if (tagDd) tagDd.style.display = 'none';
+  }
+};
+
+// Close search custom dropdowns on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('#srchTagWrap')) {
+    const d = document.getElementById('srchTagDd'); if (d) d.style.display='none';
+  }
+  if (!e.target.closest('#srchSortWrap')) {
+    const d = document.getElementById('srchSortDd'); if (d) d.style.display='none';
+  }
+});
 
 let _srchType = '', _srchAllPosts = [], _srchLoaded = false;
 window.openSearch = async () => {
@@ -565,10 +671,9 @@ window.openSearch = async () => {
     const snap = await getDocs(query(collection(db,'posts'), orderBy('createdAt','desc')));
     _srchAllPosts = snap.docs.map(d=>({id:d.id,...d.data()}));
     _srchLoaded = true;
-    // Populate tag select
+    // Populate custom tag dropdown
     await loadTags();
-    const sel = document.getElementById('srchTagSel');
-    allTags.forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent='#'+t; sel.appendChild(o); });
+    _buildSrchTagDd();
   }
   runSearch();
 };
@@ -729,9 +834,9 @@ function matchesQuery(p, q) {
 
 window.runSearch = () => {
   const q = (document.getElementById('srchMain')?.value||'').trim().toLowerCase();
-  const tag = document.getElementById('srchTagSel')?.value||'';
+  const tag = window._srchTagVals||[];
   const month = document.getElementById('srchMonth')?.value||'';
-  const sort = document.getElementById('srchSort')?.value||'newest';
+  const sort = window._srchSortVal||'newest';
   const clrBtn = document.getElementById('srchClrBtn');
   if(clrBtn) clrBtn.style.display = q?'block':'none';
 
@@ -743,8 +848,8 @@ window.runSearch = () => {
   // Text filter — supports Banglish/phonetic search
   if (q) posts = posts.filter(p => matchesQuery(p, q));
 
-  // Tag filter
-  if (tag) posts = posts.filter(p=>(p.tags||[]).includes(tag));
+  // Tag filter — AND logic: post must have ALL selected tags
+  if (tag.length) posts = posts.filter(p=>tag.every(t=>(p.tags||[]).includes(t)));
 
   // Month filter
   if (month) posts = posts.filter(p=>{
@@ -774,7 +879,7 @@ window.runSearch = () => {
   resultsEl.innerHTML = posts.map(p => {
     const typeLabel = {blog:'কার্যক্রম',guideline:'নির্দেশিকা'}[p.type]||'কার্যক্রম';
     const excerpt = (p.body||'').slice(0,100)+(p.body?.length>100?'…':'');
-    const tagsHtml = (p.tags||[]).slice(0,4).map(t=>`<span class="post-tag">#${esc(t)}</span>`).join('');
+    const tagsHtml = (p.tags||[]).slice(0,4).map(t=>_tagHtml(t)).join('');
     const img = [p.imageUrl,...(p.images||[])].filter(Boolean)[0];
     return `<div class="srch-item" onclick="closeSearch();openPost('${p.id}')">
       ${img?`<div class="srch-item-img" style="background-image:url('${esc(img)}')"></div>`:''}
@@ -802,6 +907,7 @@ window.openCreatePost = () => {
   if (!currentUser) { toast('লগইন করুন','error'); return; }
   loadTags();
   _selectedTags = [];
+  _tcMode = ''; _tcTargetTag = '';
   tagPickerRenderChips();
   const si = document.getElementById('tagSearchInp'); if(si) { si.value=''; }
   const dd = document.getElementById('tagDropdown'); if(dd) dd.style.display='none';
@@ -810,43 +916,190 @@ window.openCreatePost = () => {
 
 // ── TAG PICKER ──
 let _selectedTags = [];
+let _tcMode = ''; // 'create' | 'editcolor'
+let _tcTargetTag = '';
+
+const TAG_PALETTE = [
+  {label:'সবুজ',    hex:'#5aad6b'},
+  {label:'আকাশি',  hex:'#4da8e0'},
+  {label:'কমলা',   hex:'#e8852a'},
+  {label:'বেগুনি', hex:'#9b72d4'},
+  {label:'লাল',    hex:'#e05a5a'},
+  {label:'হলুদ',   hex:'#d4b840'},
+  {label:'গোলাপি', hex:'#d46fa0'},
+  {label:'ধূসর',   hex:'#7a9880'},
+];
+
+function _tagStyle(t) {
+  const c = _tagColors[t];
+  if (!c) return '';
+  return `color:${c};border-color:${c}55;background:${c}18;`;
+}
+function _tagHtml(t, onclick='') {
+  const sty = _tagStyle(t);
+  const handler = onclick ? `onclick="${onclick}"` : '';
+  return `<span class="post-tag" style="${sty}" ${handler}>#${esc(t)}</span>`;
+}
+function _tagDotStyle(t) {
+  const c = _tagColors[t];
+  return c ? `background:${c};` : 'background:rgba(255,255,255,.2);';
+}
+
+function _buildColorPicker(tagName, existingColor, titleText, confirmLabel) {
+  const swatches = TAG_PALETTE.map(p => {
+    const active = p.hex === existingColor ? ' tc-swatch-active' : '';
+    return `<button class="tc-swatch${active}" title="${p.label}" style="background:${p.hex};" onclick="tcPickColor('${p.hex}',this)"></button>`;
+  }).join('');
+  const noColorActive = !existingColor ? ' tc-swatch-active' : '';
+  return `
+    <div class="tc-create-box" onclick="event.stopPropagation()">
+      <div class="tc-create-label">${titleText}</div>
+      <div class="tc-create-tag-preview" id="tcPreview" style="${_tagStyle(tagName)}">#${tagName}</div>
+      <div class="tc-create-label" style="margin-top:.5rem;">রঙ বেছে নিন</div>
+      <div class="tc-swatches">
+        <button class="tc-swatch tc-no-color${noColorActive}" title="রঙ নেই" onclick="tcPickColor('',this)">✕</button>
+        ${swatches}
+      </div>
+      <div class="tc-create-btns">
+        <button class="tc-cancel-btn" onclick="tcCancel()">বাতিল</button>
+        <button class="tc-confirm-btn" onclick="tcConfirm()">✓ ${confirmLabel}</button>
+      </div>
+    </div>`;
+}
+
 function tagPickerRender(filter='') {
+  if (_tcMode) return; // color picker is open — don't overwrite
   const dd = document.getElementById('tagDropdown');
   if (!dd) return;
   const lower = filter.toLowerCase().trim();
   let list = lower ? allTags.filter(t=>t.includes(lower)) : [...allTags];
-  // Put unselected first, then selected (greyed)
   list.sort((a,b)=>{
     const aS = _selectedTags.includes(a), bS = _selectedTags.includes(b);
     return aS===bS ? a.localeCompare(b) : aS ? 1 : -1;
   });
-  // If typed something not in list, offer to create it
   const newTag = lower.replace(/[^\w\u0980-\u09FF-]/g,'');
   const canCreate = newTag && !allTags.includes(newTag) && !_selectedTags.includes(newTag);
+  const canManageTags = ['maintainer','admin'].includes(currentRole);
+
   const items = list.slice(0,20).map(t => {
     const sel = _selectedTags.includes(t);
-    return `<div class="tag-dd-item ${sel?'tag-dd-sel':''}" onclick="tagPickerPick('${t}')">
-      <span>#${t}</span>${sel?'<span class="tag-dd-check">✓</span>':''}
+    const sty = _tagStyle(t);
+    return `<div class="tag-dd-item ${sel?'tag-dd-sel':''}" style="${sty}" onclick="tagPickerPick('${t}')">
+      <span class="tag-dd-dot" style="${_tagDotStyle(t)}"></span>
+      <span class="tag-dd-label">#${t}</span>
+      <div class="tag-dd-actions">
+        ${sel ? '<span class="tag-dd-check">✓</span>' : ''}
+        ${canManageTags ? `<button class="tag-color-btn" title="রঙ পরিবর্তন" onclick="tagEditColor('${t}',event)">🎨</button>` : ''}
+        ${canManageTags ? `<button class="tag-del-btn" title="মুছুন" onclick="deleteTag('${t}',event)">🗑</button>` : ''}
+      </div>
     </div>`;
   }).join('');
+
   dd.innerHTML = (canCreate
-    ? `<div class="tag-dd-new" onclick="tagPickerCreate('${newTag}')">+ "<strong>#${newTag}</strong>" তৈরি করুন</div>`
+    ? `<div class="tag-dd-new" onclick="tagPickerInitCreate('${newTag}',event)">+ "<strong>#${newTag}</strong>" তৈরি করুন</div>`
     : '') + (items || '<div class="tag-dd-empty">কোনো ট্যাগ নেই</div>');
   dd.style.display = 'block';
 }
-const _debouncedTagRender = debounce(val => tagPickerRender(val), 180);
+
+window.tagPickerInitCreate = (t, e) => {
+  if(e) e.stopPropagation();
+  _tcMode = 'create';
+  _tcTargetTag = t;
+  window._tcSelectedColor = '';
+  const dd = document.getElementById('tagDropdown');
+  if (!dd) return;
+  dd.innerHTML = _buildColorPicker(t, '', 'নতুন ট্যাগ তৈরি', 'তৈরি করুন');
+  dd.style.display = 'block';
+};
+
+window.tagEditColor = (t, e) => {
+  if(e) e.stopPropagation();
+  if (!['maintainer','admin'].includes(currentRole)) return;
+  _tcMode = 'editcolor';
+  _tcTargetTag = t;
+  window._tcSelectedColor = _tagColors[t] || '';
+  const dd = document.getElementById('tagDropdown');
+  if (!dd) return;
+  dd.innerHTML = _buildColorPicker(t, _tagColors[t]||'', `"#${t}" রঙ পরিবর্তন`, 'সংরক্ষণ');
+  dd.style.display = 'block';
+};
+
+window.tcPickColor = (hex, btn) => {
+  window._tcSelectedColor = hex;
+  document.querySelectorAll('.tc-swatch,.tc-no-color').forEach(s => s.classList.remove('tc-swatch-active'));
+  btn.classList.add('tc-swatch-active');
+  const preview = document.getElementById('tcPreview');
+  if (preview) {
+    if (hex) { preview.style.color=hex; preview.style.borderColor=hex+'60'; preview.style.background=hex+'20'; }
+    else { preview.style.color=''; preview.style.borderColor=''; preview.style.background=''; }
+  }
+};
+
+window.tcCancel = () => {
+  _tcMode = ''; _tcTargetTag = ''; window._tcSelectedColor = '';
+  tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+};
+
+window.tcConfirm = async () => {
+  const mode = _tcMode, tag = _tcTargetTag, color = window._tcSelectedColor||'';
+  _tcMode = ''; _tcTargetTag = ''; window._tcSelectedColor = '';
+
+  if (mode === 'create') {
+    if (_selectedTags.length >= 5) { toast('সর্বোচ্চ ৫টি ট্যাগ দেওয়া যাবে','error'); tagPickerRender(''); return; }
+    const saved = await saveTag(tag, color);
+    if (saved && !_selectedTags.includes(saved)) _selectedTags.push(saved);
+    document.getElementById('tagSearchInp').value = '';
+    tagPickerRenderChips();
+    tagPickerRender('');
+    _srchLoaded = false;
+    _buildSrchTagDd();
+  } else if (mode === 'editcolor') {
+    try {
+      await updateDoc(doc(db,'tags',tag), { color });
+      if (color) _tagColors[tag] = color;
+      else delete _tagColors[tag];
+      tagPickerRenderChips();
+      tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+      _buildSrchTagDd();
+      // Refresh button chips if this tag is selected in search
+      if (window._srchTagVals.includes(tag)) _updateSrchTagBtn();
+      toast('রঙ সংরক্ষিত হয়েছে ✓');
+    } catch(err) { toast('সংরক্ষণ ব্যর্থ হয়েছে','error'); tagPickerRender(''); }
+  }
+};
+
+window.deleteTag = async (t, e) => {
+  e.stopPropagation();
+  if (!['maintainer','admin'].includes(currentRole)) return;
+  if (!confirm(`"#${t}" ট্যাগটি মুছে দেবেন?`)) return;
+  try {
+    await deleteDoc(doc(db,'tags',t));
+    allTags = allTags.filter(x=>x!==t);
+    delete _tagColors[t];
+    _selectedTags = _selectedTags.filter(x=>x!==t);
+    tagPickerRenderChips();
+    tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+    _srchLoaded = false;
+    window._srchTagVals = window._srchTagVals.filter(x=>x!==t);
+    _updateSrchTagBtn();
+    _buildSrchTagDd();
+    toast('ট্যাগ মুছে গেছে ✓');
+  } catch(e2) { toast('মুছতে পারা যায়নি','error'); }
+};
+const _debouncedTagRender = debounce(val => { if (!_tcMode) tagPickerRender(val); }, 180);
 window.tagPickerOpen = async () => {
   await loadTags();
-  tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+  if (!_tcMode) tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
 };
 window.tagPickerSearch = async (val) => {
   await loadTags();
   _debouncedTagRender(val);
 };
-window.tagPickerToggle = async () => {
+window.tagPickerToggle = async (e) => {
+  if(e) e.stopPropagation();
   const dd = document.getElementById('tagDropdown');
   if (dd.style.display === 'none') { await tagPickerOpen(); }
-  else { dd.style.display = 'none'; }
+  else { dd.style.display = 'none'; _tcMode = ''; _tcTargetTag = ''; }
 };
 window.tagPickerPick = (t) => {
   if (_selectedTags.includes(t)) {
@@ -858,21 +1111,14 @@ window.tagPickerPick = (t) => {
   tagPickerRenderChips();
   tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
 };
-window.tagPickerCreate = async (t) => {
-  if (_selectedTags.length >= 5) { toast('সর্বোচ্চ ৫টি ট্যাগ দেওয়া যাবে','error'); return; }
-  const saved = await saveTag(t);
-  if (saved && !_selectedTags.includes(saved)) _selectedTags.push(saved);
-  document.getElementById('tagSearchInp').value = '';
-  tagPickerRenderChips();
-  tagPickerRender('');
-  _srchLoaded = false; // new tag — invalidate search cache
-};
 function tagPickerRenderChips() {
   const row = document.getElementById('tagChips');
   if (!row) return;
-  row.innerHTML = _selectedTags.map(t =>
-    `<span class="tag-chip">#${t}<button onclick="tagPickerPick('${t}')">×</button></span>`
-  ).join('');
+  row.innerHTML = _selectedTags.map(t => {
+    const c = _tagColors[t];
+    const sty = c ? `color:${c};border-color:${c}55;background:${c}20;` : '';
+    return `<span class="tag-chip" style="${sty}">#${t}<button onclick="tagPickerPick('${t}')">×</button></span>`;
+  }).join('');
 }
 window.tagPickerReset = () => { _selectedTags = []; tagPickerRenderChips(); };
 // Close dropdown on outside click
@@ -880,6 +1126,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.tag-picker-wrap')) {
     const dd = document.getElementById('tagDropdown');
     if (dd) dd.style.display = 'none';
+    _tcMode = ''; _tcTargetTag = '';
   }
 });
 function parseTags() {
@@ -1375,12 +1622,50 @@ nav{
 }
 .srch-pill:hover{color:rgba(255,255,255,.9);border-color:rgba(255,255,255,.25);}
 .srch-pill.active{background:rgba(168,204,90,.18);color:var(--olive3);border-color:rgba(168,204,90,.4);}
-.srch-tag-row select,.srch-month-inp,.srch-filters select{
+.srch-month-inp{
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
   border-radius:8px;color:var(--txt);font-size:.77rem;font-family:inherit;
   padding:.24rem .5rem;outline:none;cursor:pointer;color-scheme:dark;transition:var(--trans);
 }
-.srch-tag-row select:focus,.srch-month-inp:focus,.srch-filters select:focus{border-color:rgba(168,204,90,.4);}
+.srch-month-inp:focus{border-color:rgba(168,204,90,.4);}
+
+/* Custom select dropdowns in search */
+.srch-custom-sel-wrap{position:relative;}
+.srch-custom-sel-btn{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
+  border-radius:8px;color:var(--txt);font-size:.77rem;font-family:inherit;
+  padding:.26rem .52rem .26rem .6rem;outline:none;cursor:pointer;
+  display:flex;align-items:center;gap:.4rem;min-width:80px;
+  transition:var(--trans);white-space:nowrap;
+}
+.srch-custom-sel-btn:hover{border-color:rgba(168,204,90,.35);background:rgba(255,255,255,.08);}
+.srch-sel-arrow{font-size:.62rem;color:var(--txt2);margin-left:auto;transition:var(--trans);}
+.srch-custom-sel-dd{
+  position:absolute;top:calc(100% + 4px);left:0;min-width:150px;
+  background:rgba(10,20,12,.97);border:1px solid rgba(168,204,90,.12);
+  border-radius:9px;z-index:300;
+  box-shadow:0 10px 32px rgba(0,0,0,.65);backdrop-filter:blur(20px);
+  overflow:hidden;
+}
+.srch-dd-item{
+  display:flex;align-items:center;gap:.4rem;
+  padding:.42rem .75rem;font-size:.78rem;color:var(--txt2);
+  cursor:pointer;transition:var(--trans);
+}
+.srch-dd-item:hover{background:rgba(255,255,255,.07);color:var(--txt);}
+.srch-dd-active{color:var(--olive3);background:rgba(107,140,58,.1);}
+.srch-dd-active:hover{background:rgba(107,140,58,.15);}
+.srch-dd-tag-sel{color:var(--txt);background:rgba(77,168,224,.07);}
+.srch-dd-tag-sel:hover{background:rgba(77,168,224,.13);}
+.srch-dd-chk{font-size:.68rem;flex-shrink:0;}
+.srch-dd-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+/* Multi-tag chips inside the button */
+.srch-tag-chips-wrap{display:flex;flex-wrap:wrap;gap:.22rem;align-items:center;flex:1;min-width:0;}
+.srch-tag-chip{
+  font-size:.68rem;padding:.1rem .38rem;border-radius:20px;
+  border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);
+  color:rgba(255,255,255,.7);white-space:nowrap;
+}
 .srch-status{padding:.55rem 1.1rem;font-size:.74rem;color:var(--txt2);border-bottom:1px solid rgba(255,255,255,.04);}
 .srch-results{flex:1;overflow-y:auto;padding:.5rem .65rem;}
 .srch-empty{text-align:center;padding:2.5rem;color:var(--txt2);}
@@ -1622,15 +1907,67 @@ main{max-width:1200px;margin:0 auto;padding:1.8rem 1.5rem;}
 .tag-picker-input-row input:focus{border-color:rgba(168,204,90,.4);}
 .tag-dropdown-btn{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:var(--txt2);padding:.5rem .72rem;cursor:pointer;font-size:.8rem;transition:var(--trans);}
 .tag-dropdown-btn:hover{border-color:rgba(168,204,90,.4);color:var(--olive3);}
-.tag-dropdown-box{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:rgba(10,22,12,.97);border:1px solid rgba(168,204,90,.12);border-radius:10px;z-index:50;max-height:200px;overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.6);backdrop-filter:blur(20px);}
-.tag-dd-item{display:flex;align-items:center;justify-content:space-between;padding:.44rem .8rem;font-size:.8rem;color:var(--txt2);cursor:pointer;transition:var(--trans);}
+.tag-dropdown-box{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:rgba(10,22,12,.97);border:1px solid rgba(168,204,90,.12);border-radius:10px;z-index:50;max-height:220px;overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.6);backdrop-filter:blur(20px);}
+.tag-dd-item{display:flex;align-items:center;gap:.4rem;padding:.42rem .72rem;font-size:.8rem;color:var(--txt2);cursor:pointer;transition:var(--trans);}
 .tag-dd-item:hover{background:rgba(255,255,255,.06);color:var(--txt);}
-.tag-dd-sel{color:var(--sky2);background:rgba(58,143,196,.06);}
+.tag-dd-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;opacity:.8;}
+.tag-dd-label{flex:1;min-width:0;}
+.tag-dd-actions{display:flex;align-items:center;gap:.18rem;flex-shrink:0;margin-left:auto;}
+.tag-dd-sel{background:rgba(58,143,196,.06);}
 .tag-dd-sel:hover{background:rgba(58,143,196,.12);}
-.tag-dd-check{color:var(--sky2);font-size:.7rem;}
+.tag-dd-check{font-size:.7rem;opacity:.9;}
 .tag-dd-new{padding:.44rem .8rem;font-size:.78rem;color:var(--olive3);cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);transition:var(--trans);}
 .tag-dd-new:hover{background:rgba(107,140,58,.08);}
-.tag-dd-empty{padding:.6rem .8rem;font-size:.78rem;color:var(--txt2);text-align:center;}
+.tag-dd-empty{padding:.65rem .8rem;font-size:.78rem;color:var(--txt2);text-align:center;}
+
+/* Tag action buttons — admin/maintainer only */
+.tag-color-btn,.tag-del-btn{
+  background:none;border:none;cursor:pointer;
+  font-size:.68rem;padding:.1rem .2rem;border-radius:4px;
+  opacity:0;transition:var(--trans);line-height:1;
+}
+.tag-dd-item:hover .tag-color-btn,
+.tag-dd-item:hover .tag-del-btn{opacity:.55;}
+.tag-color-btn:hover{opacity:1 !important;background:rgba(77,168,224,.18);}
+.tag-del-btn:hover{opacity:1 !important;background:rgba(184,48,48,.2);color:#e05c5c;}
+
+/* Inline color picker */
+.tc-create-box{padding:.8rem .85rem;}
+.tc-create-tag-preview{
+  display:inline-block;font-size:.82rem;font-weight:600;
+  border:1px solid rgba(255,255,255,.15);border-radius:20px;
+  padding:.22rem .78rem;margin:.3rem 0 .55rem;
+  transition:var(--trans);color:var(--txt2);background:rgba(255,255,255,.06);
+}
+.tc-create-label{font-size:.65rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.7px;font-family:'IBM Plex Mono',monospace;}
+.tc-swatches{display:flex;flex-wrap:wrap;gap:.35rem;margin:.48rem 0 .72rem;}
+.tc-swatch{
+  width:24px;height:24px;border-radius:50%;border:2px solid transparent;
+  cursor:pointer;transition:var(--trans);outline:none;flex-shrink:0;
+}
+.tc-swatch:hover{transform:scale(1.2);box-shadow:0 2px 8px rgba(0,0,0,.5);}
+.tc-swatch-active{border-color:#fff !important;transform:scale(1.2) !important;box-shadow:0 2px 10px rgba(0,0,0,.55);}
+.tc-no-color{
+  background:rgba(255,255,255,.08) !important;
+  border:1px dashed rgba(255,255,255,.3) !important;
+  color:rgba(255,255,255,.45);font-size:.6rem;
+  display:flex;align-items:center;justify-content:center;
+}
+.tc-no-color.tc-swatch-active{border-color:#fff !important;border-style:solid !important;}
+.tc-create-btns{display:flex;gap:.4rem;}
+.tc-cancel-btn{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);
+  color:var(--txt2);padding:.32rem .7rem;border-radius:7px;cursor:pointer;
+  font-size:.76rem;font-family:inherit;transition:var(--trans);
+}
+.tc-cancel-btn:hover{background:rgba(255,255,255,.1);color:var(--txt);}
+.tc-confirm-btn{
+  background:linear-gradient(135deg,var(--olive2),var(--olive));
+  border:none;color:#fff;padding:.32rem .85rem;border-radius:7px;cursor:pointer;
+  font-size:.76rem;font-family:inherit;font-weight:600;flex:1;transition:var(--trans);
+  box-shadow:0 2px 8px rgba(107,140,58,.25);
+}
+.tc-confirm-btn:hover{background:linear-gradient(135deg,var(--olive3),var(--olive2));transform:translateY(-1px);}
 
 /* Image upload */
 .img-drop{border:2px dashed rgba(255,255,255,.1);border-radius:9px;padding:1rem;text-align:center;color:var(--txt2);font-size:.78rem;cursor:pointer;position:relative;transition:var(--trans);}
@@ -1846,7 +2183,7 @@ footer p{color:var(--txt3);font-size:.73rem;letter-spacing:.02em;}
         <div id="tagChips" class="tag-chips-row"></div>
         <div class="tag-picker-input-row">
           <input id="tagSearchInp" placeholder="🔍 ট্যাগ খুঁজুন বা নতুন লিখুন…" oninput="tagPickerSearch(this.value)" onfocus="tagPickerOpen()" autocomplete="off"/>
-          <button class="tag-dropdown-btn" onclick="tagPickerToggle()" title="সব ট্যাগ দেখুন">▾</button>
+          <button class="tag-dropdown-btn" onclick="tagPickerToggle(event)" title="সব ট্যাগ দেখুন">▾</button>
         </div>
         <div id="tagDropdown" class="tag-dropdown-box" style="display:none;"></div>
       </div>
@@ -1921,10 +2258,14 @@ footer p{color:var(--txt3);font-size:.73rem;letter-spacing:.02em;}
       </div>
       <div class="srch-filter-group">
         <span class="srch-filter-label">ট্যাগ</span>
-        <div class="srch-tag-row">
-          <select id="srchTagSel" onchange="runSearch()">
-            <option value="">সব ট্যাগ</option>
-          </select>
+        <div class="srch-custom-sel-wrap" id="srchTagWrap">
+          <button class="srch-custom-sel-btn" onclick="toggleSrchDd('tag',event)">
+            <span id="srchTagLabel">সব ট্যাগ</span>
+            <span class="srch-sel-arrow">▾</span>
+          </button>
+          <div class="srch-custom-sel-dd" id="srchTagDd" style="display:none">
+            <div class="srch-dd-item srch-dd-active" data-val="" onclick="setSrchTag('',this)">সব ট্যাগ</div>
+          </div>
         </div>
       </div>
       <div class="srch-filter-group">
@@ -1933,12 +2274,18 @@ footer p{color:var(--txt3);font-size:.73rem;letter-spacing:.02em;}
       </div>
       <div class="srch-filter-group">
         <span class="srch-filter-label">সাজান</span>
-        <select id="srchSort" onchange="runSearch()">
-          <option value="newest">নতুন আগে</option>
-          <option value="oldest">পুরনো আগে</option>
-          <option value="liked">সবচেয়ে বেশি লাইক</option>
-          <option value="viewed">সবচেয়ে বেশি দেখা</option>
-        </select>
+        <div class="srch-custom-sel-wrap" id="srchSortWrap">
+          <button class="srch-custom-sel-btn" onclick="toggleSrchDd('sort',event)">
+            <span id="srchSortLabel">নতুন আগে</span>
+            <span class="srch-sel-arrow">▾</span>
+          </button>
+          <div class="srch-custom-sel-dd" id="srchSortDd" style="display:none">
+            <div class="srch-dd-item srch-dd-active" data-val="newest" onclick="setSrchSort('newest','নতুন আগে',this)">নতুন আগে</div>
+            <div class="srch-dd-item" data-val="oldest" onclick="setSrchSort('oldest','পুরনো আগে',this)">পুরনো আগে</div>
+            <div class="srch-dd-item" data-val="liked" onclick="setSrchSort('liked','সবচেয়ে বেশি লাইক',this)">সবচেয়ে বেশি লাইক</div>
+            <div class="srch-dd-item" data-val="viewed" onclick="setSrchSort('viewed','সবচেয়ে বেশি দেখা',this)">সবচেয়ে বেশি দেখা</div>
+          </div>
+        </div>
       </div>
     </div>
 
