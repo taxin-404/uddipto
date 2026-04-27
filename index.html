@@ -1,0 +1,2712 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>উদ্দীপ্ত তরুণ সংঘ</title>
+<meta name="color-scheme" content="light dark">
+<meta name="darkreader-lock">
+<script>
+// Immediately apply theme before any paint to prevent flash
+(function(){
+  var t=localStorage.getItem('uts-theme');
+  if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
+  document.documentElement.setAttribute('data-theme',t);
+})();
+</script>
+<link rel="icon" type="image/jpeg" href="https://i.ibb.co.com/wFHMC4Km/logo.jpg"/>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Hind+Siliguri:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc,
+  deleteDoc, query, orderBy, where, onSnapshot, arrayUnion, arrayRemove,
+  serverTimestamp, increment, Timestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBnCgL4iEgeJrAT2Fla9JaZ3EnOe5JJoPg",
+  authDomain: "uddipto-4d584.firebaseapp.com",
+  projectId: "uddipto-4d584",
+  storageBucket: "uddipto-4d584.firebasestorage.app",
+  messagingSenderId: "512907631953",
+  appId: "1:512907631953:web:3478da28a734fcea680770"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const gp = new GoogleAuthProvider();
+
+let currentUser = null, currentRole = 'user', currentPage = 'recent';
+let unsubPosts = null, allMembers = [], allTags = [];
+let searchQuery = '', searchTag = '', searchMonth = '';
+let _tagsLoaded = false, _membersLoaded = false;
+let _tagColors = {}, _pendingNewTag = '';
+let _unsubCmList = null, _unsubCbList = null;
+const _liking = new Set(), _saving = new Set();
+
+function debounce(fn, ms) {
+  let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+// ── AUTH ──
+window.loginWithGoogle = async () => {
+  try { await signInWithPopup(auth, gp); }
+  catch(e) { toast('Login failed: ' + e.message, 'error'); }
+};
+window.logout = async () => { await signOut(auth); toast('লগআউট হয়েছে'); closeAllModals(); };
+
+onAuthStateChanged(auth, async user => {
+  currentUser = user;
+  if (user) {
+    const snap = await getDoc(doc(db,'users',user.uid));
+    if (!snap.exists()) {
+      await setDoc(doc(db,'users',user.uid), { uid:user.uid, name:user.displayName,
+        email:user.email, photo:user.photoURL, role:'user', createdAt:serverTimestamp(), savedPosts:[] });
+      currentRole = 'user';
+    } else currentRole = snap.data().role || 'user';
+    document.getElementById('loginBtn').style.display = 'none';
+    const pa = document.getElementById('profileArea');
+    pa.style.display = 'flex';
+    pa.querySelector('.pa-img').src = user.photoURL||'';
+    pa.querySelector('.pa-name').textContent = user.displayName?.split(' ')[0]||'';
+  } else {
+    currentRole = 'user';
+    _tagsLoaded = false; _membersLoaded = false; _srchLoaded = false;
+    document.getElementById('loginBtn').style.display = 'flex';
+    document.getElementById('profileArea').style.display = 'none';
+  }
+  updatePostBtn(); loadPosts(currentPage);
+});
+
+function updatePostBtn() {
+  const b = document.getElementById('newPostBtn');
+  if (b) b.style.display = canPost() ? 'flex' : 'none';
+}
+function isBlocked()       { return currentRole === 'blocked'; }
+function canPost()         { return ['maintainer','admin','worker'].includes(currentRole); }
+function canComment()      { return currentUser && !isBlocked(); }
+function canLikePost()     { return currentUser && !isBlocked(); }
+function canPinComment()   { return ['maintainer','admin'].includes(currentRole); }
+function canDeleteComment(c) {
+  if (!currentUser || isBlocked()) return false;
+  if (['maintainer','admin'].includes(currentRole)) return true;
+  // worker and user can delete their own comments
+  return (currentRole === 'worker' || currentRole === 'user') && c.authorId === currentUser.uid;
+}
+function canReportComment(){ return !!currentUser; } // all roles including blocked
+// post delete: maintainer+admin full, worker own-only only, user: no
+function canDelete(p)      { return currentUser && (currentRole==='maintainer'||currentRole==='admin'||(currentRole==='worker'&&p.authorId===currentUser.uid)); }
+
+// ── CLOSE FLOATING COMMENT BOX (must be window-scoped so inline onclick can reach it) ──
+window.closeCbBox = () => {
+  if (_unsubCbList) { _unsubCbList(); _unsubCbList = null; }
+  document.getElementById('commentBox').style.display = 'none';
+};
+
+// ── SHARED COMMENT RENDERER ──
+// context: 'cb' (floating box) | 'cm' (modal)
+function renderCommentItem(c, cid, pid, context) {
+  const setReplyFn = context === 'cb' ? 'cbSetReply' : 'cmSetReply';
+  const pinnedBadge = c.pinned ? `<span class="cm-pin-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></span>` : '';
+  const replyRef   = c.replyTo ? `<span class="reply-ref"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg> ${esc(c.replyTo)}</span>` : '';
+  const acts = [];
+  if (canComment())      acts.push(`<button class="cm-act reply-btn" title="রিপ্লাই" onclick="${setReplyFn}('${esc(c.authorName||'')}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></button>`);
+  if (canPinComment())   acts.push(`<button class="cm-act cm-pin ${c.pinned?'cm-pinned':''}" title="${c.pinned?'আনপিন':'পিন'}" onclick="togglePinComment('${pid}','${cid}',${!!c.pinned})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>`);
+  if (canDeleteComment(c)) acts.push(`<button class="cm-act cm-del" title="মুছুন" onclick="deleteComment('${pid}','${cid}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg></button>`);
+  if (canReportComment()) acts.push(`<button class="cm-act cm-rep" title="রিপোর্ট" onclick="reportComment('${pid}','${cid}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>`);
+  return `<div class="cmi${c.pinned?' cmi-pinned':''}" id="cmi-${cid}">
+    <img src="${esc(c.authorPhoto||'')}" onerror="this.style.display='none'"/>
+    <div style="width:100%">
+      <div class="cmi-top">
+        <span>${pinnedBadge}<strong>${esc(c.authorName||'')}</strong><span class="cmt"> ${tAgo(c.createdAt)}</span></span>
+        <div class="cmi-acts">${acts.join('')}</div>
+      </div>
+      ${replyRef}<p>${esc(c.text||'')}</p>
+    </div></div>`;
+}
+
+// Sort pinned comments to top, preserve time order within each group
+function sortComments(docs) {
+  const pinned = docs.filter(d => d.data().pinned);
+  const rest   = docs.filter(d => !d.data().pinned);
+  return [...pinned, ...rest];
+}
+
+// ── TAGS ──
+async function loadTags(force = false) {
+  if (_tagsLoaded && !force) return;
+  const snap = await getDocs(collection(db,'tags'));
+  allTags = snap.docs.map(d => d.data().name).filter(Boolean);
+  snap.docs.forEach(d => { if (d.data().color) _tagColors[d.data().name] = d.data().color; });
+  _tagsLoaded = true;
+}
+async function saveTag(name, color='') {
+  const clean = name.trim().toLowerCase().replace(/\s+/g,'-');
+  if (!clean || allTags.includes(clean)) return clean;
+  await setDoc(doc(db,'tags',clean), { name:clean, color:color||'', createdBy:currentUser.uid, createdAt:serverTimestamp() });
+  allTags.push(clean);
+  if (color) _tagColors[clean] = color;
+  return clean;
+}
+
+// ── LOAD POSTS ──
+window.loadPosts = async (page = currentPage) => {
+  currentPage = page;
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
+  const titleMap = { recent:'সাম্প্রতিক · This Month', blog:'কার্যক্রম · Activities', guideline:'নির্দেশিকা · Guidelines' };
+  const st = document.getElementById('sectionTitle');
+  if (st) st.textContent = titleMap[page]||'Posts';
+
+  const grid = document.getElementById('postsGrid');
+  grid.innerHTML = Array(6).fill('<div class="shimmer"></div>').join('');
+  if (unsubPosts) unsubPosts();
+
+  // Ensure tag colors are loaded before any card renders
+  await loadTags();
+
+  unsubPosts = onSnapshot(query(collection(db,'posts'), orderBy('createdAt','desc')), snap => {
+    let posts = snap.docs.map(d => ({id:d.id,...d.data()}));
+    const now = new Date();
+    if (page==='recent') {
+      posts = posts.filter(p => {
+        if (!p.createdAt) return false;
+        const d = p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+        return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear();
+      });
+    } else {
+      posts = posts.filter(p => p.type === page);
+    }
+    // Search filters
+    if (searchQuery) posts = posts.filter(p => (p.title||'').toLowerCase().includes(searchQuery)||(p.body||'').toLowerCase().includes(searchQuery)||(p.authorName||'').toLowerCase().includes(searchQuery));
+    if (searchTag) posts = posts.filter(p => (p.tags||[]).includes(searchTag));
+    if (searchMonth) posts = posts.filter(p => {
+      if (!p.createdAt) return false;
+      const d = p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` === searchMonth;
+    });
+    renderPosts(posts);
+  });
+};
+
+function tAgo(ts) {
+  if (!ts) return '';
+  const d = ts.toDate?ts.toDate():new Date(ts), s=(Date.now()-d)/1000;
+  if(s<60) return 'এইমাত্র';
+  if(s<3600) return Math.floor(s/60)+'m আগে';
+  if(s<86400) return Math.floor(s/3600)+'h আগে';
+  return d.toLocaleDateString('bn-BD',{day:'numeric',month:'short'});
+}
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+function renderPosts(posts) {
+  const grid = document.getElementById('postsGrid');
+  if (!posts.length) {
+    grid.innerHTML = `<div class="empty"><div style="font-size:2rem;margin-bottom:.5rem"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></div><p>কোনো পোস্ট নেই।</p></div>`;
+    return;
+  }
+  grid.innerHTML = posts.map(cardHtml).join('');
+}
+
+function cardHtml(p) {
+  const liked = currentUser&&(p.likes||[]).includes(currentUser.uid);
+  const saved = currentUser&&(p.savedBy||[]).includes(currentUser.uid);
+  const allImgs = [p.imageUrl,...(p.images||[])].filter(Boolean);
+  const hasText = !!(p.body||'').trim();
+  const hasImgs = allImgs.length > 0;
+  const tagsHtml = (p.tags||[]).map(t=>_tagHtml(t,`event.stopPropagation();filterByTag('${esc(t)}')`)).join('');
+
+  // Image layout: 1=full, 2=big+small, 3+=big+small+blur/count
+  let imgBlock = '';
+  if (hasImgs) {
+    if (allImgs.length === 1) {
+      imgBlock = `<div class="card-img-wrap ci-single" onclick="openPost('${p.id}')">
+        <div class="ci-full" style="background-image:url('${esc(allImgs[0])}')"></div>
+      </div>`;
+    } else if (allImgs.length === 2) {
+      // Two images: big left + full-height right — no fake blurred 3rd panel
+      imgBlock = `<div class="card-img-wrap ci-equal" onclick="openPost('${p.id}')">
+        <div class="ci-main" style="background-image:url('${esc(allImgs[0])}')"></div>
+        <div class="ci-main" style="background-image:url('${esc(allImgs[1])}')"></div>
+      </div>`;
+    } else {
+      // 3+ images: big left + top-right + bottom-right (with count if >3)
+      const extra = allImgs.length - 3;
+      const ci_s2_overlay = extra > 0 ? `<div class="ci-overlay">+${extra}</div>` : '';
+      imgBlock = `<div class="card-img-wrap" onclick="openPost('${p.id}')">
+        <div class="ci-main" style="background-image:url('${esc(allImgs[0])}')"></div>
+        <div class="ci-side">
+          <div class="ci-s1" style="background-image:url('${esc(allImgs[1])}')"></div>
+          <div class="ci-s2" style="background-image:url('${esc(allImgs[2])}')">
+            ${ci_s2_overlay}
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+
+  const typeLabel = {blog:'কার্যক্রম',guideline:'নির্দেশিকা'}[p.type]||'কার্যক্রম';
+
+  return `<div class="card" onclick="openPost('${p.id}')">
+    <div class="card-inner">
+      <div class="card-meta-row">
+        <div class="card-author-row">
+          <img src="${esc(p.authorPhoto||'')}" class="card-av" onerror="this.style.display='none'"/>
+          <span class="card-author">${esc(p.authorName||'')}</span>
+        </div>
+        <span class="card-type-badge ct-${p.type||'blog'}">${typeLabel}</span>
+      </div>
+      <h3 class="card-title">${esc(p.title||'')}</h3>
+      ${hasText?`<p class="card-excerpt">${esc((p.body||'').slice(0,120))}${(p.body||'').length>120?'…':''}</p>`:''}
+      ${tagsHtml?`<div class="card-tags">${tagsHtml}</div>`:''}
+    </div>
+    ${imgBlock}
+    <div class="card-footer-row">
+      <span class="card-date"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> ${tAgo(p.createdAt)}</span>
+      <span class="card-readtime"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount||0}</span>
+    </div>
+    <div class="cact" onclick="event.stopPropagation()">
+      <button class="ca ${liked?'cal':''}" onclick="toggleLike('${p.id}',this)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+        ${p.likeCount?`<span>${p.likeCount}</span>`:''}
+      </button>
+      <button class="ca" onclick="openComments('${p.id}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        ${p.commentCount?`<span>${p.commentCount}</span>`:''}
+      </button>
+      <button class="ca ${saved?'cas':''}" onclick="toggleSave('${p.id}',this)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      ${canDelete(p)?`<button class="ca ca-del" onclick="deletePost('${p.id}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg></button>`:''}
+    </div>
+  </div>`;
+}
+
+// ── OPEN POST (full view) ──
+window.openPost = async (id) => {
+  // Always re-fetch current user's role to ensure it's up to date
+  if (currentUser) {
+    const uSnap = await getDoc(doc(db,'users',currentUser.uid));
+    if (uSnap.exists()) currentRole = uSnap.data().role || 'user';
+  }
+  const snap = await getDoc(doc(db,'posts',id));
+  if (!snap.exists()) return;
+  const p = {id,...snap.data()};
+  // Deduplicate views: track seen posts in localStorage (persists across sessions)
+  const viewKey = 'viewed_' + id;
+  const alreadySeen = localStorage.getItem(viewKey);
+  if (!alreadySeen) {
+    await updateDoc(doc(db,'posts',id),{viewCount:increment(1)});
+    localStorage.setItem(viewKey, '1');
+  }
+  const liked = currentUser&&(p.likes||[]).includes(currentUser.uid);
+  const saved = currentUser&&(p.savedBy||[]).includes(currentUser.uid);
+  const allImgs = [p.imageUrl,...(p.images||[])].filter(Boolean);
+  const typeLabel = {blog:'কার্যক্রম',guideline:'নির্দেশিকা'}[p.type]||'কার্যক্রম';
+  const tagsHtml = (p.tags||[]).map(t=>_tagHtml(t,`filterByTag('${esc(t)}')`)).join('');
+
+  // Store images globally so lightbox onclick can use index only (avoids JSON-in-HTML-attr issue)
+  window._postImgs = allImgs;
+  let imgHtml = '';
+  if (allImgs.length===1) {
+    imgHtml = `<div class="pm-img-single" onclick="openLightbox(0)" style="background-image:url('${esc(allImgs[0])}')"><div class="pm-img-hover"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`;
+  } else if (allImgs.length>1) {
+    imgHtml = `<div class="pm-gallery">${allImgs.map((u,i)=>`<div class="pm-gimg" style="background-image:url('${esc(u)}')" onclick="openLightbox(${i})"><div class="pm-gimg-hover"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`).join('')}</div>`;
+  }
+
+  document.getElementById('postModal').innerHTML = `
+    <div class="mo" onclick="closeModal('postModal')"></div>
+    <div class="mb pmb">
+      <button class="mcl" onclick="closeModal('postModal')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      <div class="pm-bd">
+        <div class="pm-meta">
+          <span class="card-type-badge ct-${p.type||'blog'}">${typeLabel}</span>
+          <span>${tAgo(p.createdAt)}</span><span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount||0}</span>
+        </div>
+        <h2 class="pm-title">${esc(p.title||'')}</h2>
+        <div class="pm-auth">
+          <img src="${esc(p.authorPhoto||'')}" onerror="this.style.display='none'"/>
+          <span>${esc(p.authorName||'')}</span>
+          <span class="pm-rb">${p.authorRole||'user'}</span>
+        </div>
+        ${p.body?`<div class="pm-txt">${esc(p.body).replace(/\n/g,'<br/>')}</div>`:''}
+        ${tagsHtml?`<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>`:''}
+        ${imgHtml}
+        <div class="pm-acts">
+          <button class="pill ${liked?'pla':''}" onclick="toggleLike('${id}',this)" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> Like ${p.likeCount||0}</button>
+          <button class="pill ${saved?'psa':''}" onclick="toggleSave('${id}',this)" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg> Save</button>
+          ${canDelete(p)?`<button class="pill pill-del" onclick="deletePost('${id}');closeModal('postModal')" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg> মুছুন</button>`:''}
+        </div>
+        <div class="cmw">
+          <h4>মন্তব্য · Comments</h4>
+          <div id="cmList"></div>
+          ${currentUser
+            ?`<div class="cmf"><img src="${esc(currentUser.photoURL||'')}" onerror="this.style.display='none'"/>
+               <input id="cmIn" placeholder="মন্তব্য লিখুন…" onkeydown="if(event.key==='Enter')postComment('${id}')"/>
+               <button onclick="postComment('${id}')">Post</button></div>`
+            :'<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>'}
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('postModal').style.display = 'flex';
+  loadComments(id);
+};
+
+// ── FLOATING COMMENT BOX ──
+window.openComments = async (id) => {
+  // Always re-fetch current user's role to ensure it's up to date
+  if (currentUser) {
+    const uSnap = await getDoc(doc(db,'users',currentUser.uid));
+    if (uSnap.exists()) currentRole = uSnap.data().role || 'user';
+  }
+  const snap = await getDoc(doc(db,'posts',id));
+  if (!snap.exists()) return;
+  const p = snap.data();
+  const box = document.getElementById('commentBox');
+  const formHtml = canComment()
+    ? `<div class="cb-form">
+         <img src="${esc(currentUser.photoURL||'')}" onerror="this.style.display='none'"/>
+         <input id="cbInput" placeholder="মন্তব্য লিখুন…" onkeydown="if(event.key==='Enter')cbPostComment('${id}')"/>
+         <button onclick="cbPostComment('${id}')">→</button>
+       </div>`
+    : currentUser
+      ? '<p class="cmt-h cmt-blocked"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> আপনি ব্লক আছেন</p>'
+      : '<p class="cmt-h">মন্তব্য করতে লগইন করুন</p>';
+  box.innerHTML = `
+    <div class="cb-header">
+      <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> ${esc(p.title||'Comments')}</span>
+      <button class="cb-close-btn" onclick="closeCbBox()" title="বন্ধ করুন"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="cb-list" id="cbList"></div>
+    ${formHtml}`;
+  box.style.display = 'flex';
+  if (_unsubCbList) { _unsubCbList(); _unsubCbList = null; }
+  _unsubCbList = onSnapshot(query(collection(db,'posts',id,'comments'), orderBy('createdAt','asc')), snap => {
+    const list = document.getElementById('cbList');
+    if (!list) return;
+    if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
+    list.innerHTML = sortComments(snap.docs).map(d => renderCommentItem(d.data(), d.id, id, 'cb')).join('');
+    list.scrollTop = list.scrollHeight;
+  });
+};
+
+let _cbReplyTo = '';
+window.cbSetReply = (name) => {
+  _cbReplyTo = name;
+  const inp = document.getElementById('cbInput');
+  if (inp) { inp.placeholder = 'রিপ্লাই লিখুন…'; inp.focus(); }
+  const form = document.querySelector('.cb-form');
+  if (form) {
+    let chip = form.querySelector('.reply-chip');
+    if (!chip) { chip = document.createElement('div'); chip.className='reply-chip'; form.parentNode.insertBefore(chip, form); }
+    chip.innerHTML = `<span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg> <strong>${name}</strong> কে রিপ্লাই</span><button onclick="cbCancelReply()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+  }
+};
+window.cbCancelReply = () => {
+  _cbReplyTo = '';
+  const chip = document.querySelector('.cb-form')?.previousElementSibling;
+  if (chip?.classList.contains('reply-chip')) chip.remove();
+  const inp = document.getElementById('cbInput');
+  if (inp) { inp.placeholder = 'মন্তব্য লিখুন…'; inp.value = ''; inp.focus(); }
+};
+window.cbPostComment = async (pid) => {
+  if (!canComment()) { toast('আপনি ব্লক আছেন','error'); return; }
+  const inp = document.getElementById('cbInput');
+  const txt = inp?.value?.trim(); if (!txt) return;
+  const replyTo = _cbReplyTo; cbCancelReply();
+  inp.disabled = true;
+  try {
+    await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
+      authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
+      replyTo: replyTo||null, createdAt:serverTimestamp() });
+    await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+  } catch(e) {
+    toast('মন্তব্য পাঠানো যায়নি','error');
+    if (inp) inp.value = txt;
+  } finally {
+    if (inp) inp.disabled = false;
+  }
+};
+
+// ── COMMENT ACTIONS ──
+window.togglePinComment = async (pid, cid, isPinned) => {
+  if (!canPinComment()) return;
+  try {
+    await updateDoc(doc(db,'posts',pid,'comments',cid), { pinned: !isPinned });
+    toast(isPinned ? 'পিন সরানো হয়েছে' : 'পিন করা হয়েছে');
+  } catch(e) { toast('পিন করা যায়নি','error'); }
+};
+
+window.deleteComment = async (pid, cid) => {
+  if (!currentUser) return;
+  if (!confirm('এই মন্তব্য মুছে দেবেন?')) return;
+  try {
+    await deleteDoc(doc(db,'posts',pid,'comments',cid));
+    await updateDoc(doc(db,'posts',pid), { commentCount: increment(-1) });
+    toast('মন্তব্য মুছে গেছে');
+  } catch(e) { toast('মুছতে পারা যায়নি','error'); }
+};
+
+window.reportComment = async (pid, cid) => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  if (!confirm('এই মন্তব্যটি রিপোর্ট করবেন?')) return;
+  try {
+    await addDoc(collection(db,'reports'), {
+      type: 'comment', pid, cid,
+      reportedBy: currentUser.uid,
+      reportedAt: serverTimestamp()
+    });
+    toast('রিপোর্ট পাঠানো হয়েছে');
+  } catch(e) { toast('রিপোর্ট করা যায়নি','error'); }
+};
+
+window.loadComments = pid => {
+  const list = document.getElementById('cmList'); if (!list) return;
+  if (_unsubCmList) { _unsubCmList(); _unsubCmList = null; }
+  _unsubCmList = onSnapshot(query(collection(db,'posts',pid,'comments'), orderBy('createdAt','asc')), snap => {
+    if (!document.getElementById('cmList')) return;
+    if (snap.empty) { list.innerHTML = '<p class="cmt-h">কোনো মন্তব্য নেই</p>'; return; }
+    list.innerHTML = sortComments(snap.docs).map(d => renderCommentItem(d.data(), d.id, pid, 'cm')).join('');
+  });
+};
+
+let _cmReplyTo = '';
+window.cmSetReply = (name) => {
+  _cmReplyTo = name;
+  const inp = document.getElementById('cmIn');
+  if (inp) { inp.placeholder = 'রিপ্লাই লিখুন…'; inp.focus(); }
+  const form = document.querySelector('.cmf');
+  if (form) {
+    let chip = form.querySelector('.reply-chip');
+    if (!chip) { chip = document.createElement('div'); chip.className='reply-chip'; form.parentNode.insertBefore(chip, form); }
+    chip.innerHTML = `<span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg> <strong>${name}</strong> কে রিপ্লাই</span><button onclick="cmCancelReply()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+  }
+};
+window.cmCancelReply = () => {
+  _cmReplyTo = '';
+  const form = document.querySelector('.cmf');
+  const chip = form?.previousElementSibling;
+  if (chip?.classList.contains('reply-chip')) chip.remove();
+  const inp = document.getElementById('cmIn');
+  if (inp) { inp.placeholder = 'মন্তব্য লিখুন…'; inp.value = ''; inp.focus(); }
+};
+window.postComment = async pid => {
+  if (!canComment()) { toast(currentUser ? 'আপনি ব্লক আছেন' : 'লগইন করুন','error'); return; }
+  const inp = document.getElementById('cmIn');
+  const txt = inp?.value?.trim(); if (!txt) return;
+  const replyTo = _cmReplyTo; cmCancelReply();
+  inp.disabled = true;
+  try {
+    await addDoc(collection(db,'posts',pid,'comments'), { text:txt, authorId:currentUser.uid,
+      authorName:currentUser.displayName, authorPhoto:currentUser.photoURL,
+      replyTo: replyTo||null, createdAt:serverTimestamp() });
+    await updateDoc(doc(db,'posts',pid), { commentCount:increment(1) });
+  } catch(e) {
+    toast('মন্তব্য পাঠানো যায়নি','error');
+    if (inp) inp.value = txt;
+  } finally {
+    if (inp) inp.disabled = false;
+  }
+};
+
+// ── LIKES & SAVES ──
+window.toggleLike = async (id, btn) => {
+  if (!currentUser) { toast('লাইক দিতে লগইন করুন','error'); return; }
+  if (isBlocked()) { toast('আপনি ব্লক আছেন','error'); return; }
+  if (_liking.has(id)) return;
+  _liking.add(id);
+  const wasLiked = btn?.classList.contains('cal') || btn?.classList.contains('pla');
+  btn?.classList.toggle('cal', !wasLiked);
+  btn?.classList.toggle('pla', !wasLiked);
+  try {
+    await updateDoc(doc(db,'posts',id), {
+      likes: wasLiked ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid),
+      likeCount: increment(wasLiked ? -1 : 1)
+    });
+  } catch(e) {
+    btn?.classList.toggle('cal', wasLiked);
+    btn?.classList.toggle('pla', wasLiked);
+    toast('ত্রুটি হয়েছে','error');
+  } finally {
+    _liking.delete(id);
+  }
+};
+window.toggleSave = async (id, btn) => {
+  if (!currentUser) { toast('সেভ করতে লগইন করুন','error'); return; }
+  if (_saving.has(id)) return;
+  _saving.add(id);
+  const wasSaved = btn?.classList.contains('cas') || btn?.classList.contains('psa');
+  btn?.classList.toggle('cas', !wasSaved);
+  btn?.classList.toggle('psa', !wasSaved);
+  try {
+    const pr = doc(db,'posts',id), ur = doc(db,'users',currentUser.uid);
+    await updateDoc(pr, { savedBy: wasSaved ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid) });
+    await updateDoc(ur, { savedPosts: wasSaved ? arrayRemove(id) : arrayUnion(id) });
+    toast(wasSaved ? 'সেভ সরানো হয়েছে' : 'সেভ হয়েছে');
+  } catch(e) {
+    btn?.classList.toggle('cas', wasSaved);
+    btn?.classList.toggle('psa', wasSaved);
+    toast('ত্রুটি হয়েছে','error');
+  } finally {
+    _saving.delete(id);
+  }
+};
+window.deletePost = async id => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  // Fetch post to verify ownership for workers
+  const pSnap = await getDoc(doc(db,'posts',id));
+  if (!pSnap.exists()) { toast('পোস্ট পাওয়া যায়নি','error'); return; }
+  const pData = pSnap.data();
+  if (!canDelete({...pData, id})) { toast('আপনার অনুমতি নেই','error'); return; }
+  if (!confirm('এই পোস্ট মুছে দেবেন?')) return;
+  try {
+    const cmSnap = await getDocs(collection(db,'posts',id,'comments'));
+    await Promise.all(cmSnap.docs.map(d => deleteDoc(d.ref)));
+    await deleteDoc(doc(db,'posts',id));
+    toast('পোস্ট মুছে গেছে');
+  } catch(e) { toast('মুছতে পারা যায়নি','error'); }
+};
+
+// ── SEARCH ──
+window.filterByTag = tag => {
+  openSearch();
+  setTimeout(()=>{
+    if (tag && !window._srchTagVals.includes(tag)) {
+      window._srchTagVals.push(tag);
+      _updateSrchTagBtn();
+      _buildSrchTagDd();
+      runSearch();
+    }
+  }, 200);
+};
+
+// ── CUSTOM SEARCH DROPDOWNS ──
+window._srchTagVals = [];
+window._srchSortVal = 'newest';
+
+function _buildSrchTagDd() {
+  const dd = document.getElementById('srchTagDd');
+  if (!dd) return;
+  const none = window._srchTagVals.length === 0;
+  dd.innerHTML = `<div class="srch-dd-item srch-dd-clear${none?' srch-dd-active':''}" data-val="" onclick="setSrchTag('',this)">
+      ${none?'<span class="srch-dd-chk"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>':'<span class="srch-dd-chk" style="opacity:0">✓</span>'}সব ট্যাগ
+    </div>`
+    + allTags.map(t => {
+        const c = _tagColors[t];
+        const dotStyle = c ? `background:${c};` : 'background:rgba(255,255,255,.25);';
+        const sel = window._srchTagVals.includes(t);
+        return `<div class="srch-dd-item${sel?' srch-dd-tag-sel':''}" data-val="${t}" onclick="setSrchTag('${t}',this)">
+          <span class="srch-dd-dot" style="${dotStyle}"></span>
+          <span style="flex:1;min-width:0;">#${t}</span>
+          <span class="srch-dd-chk" style="opacity:${sel?1:0}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+        </div>`;
+      }).join('');
+}
+
+function _updateSrchTagBtn() {
+  const btn = document.querySelector('#srchTagWrap .srch-custom-sel-btn');
+  if (!btn) return;
+  const vals = window._srchTagVals;
+  if (!vals.length) {
+    btn.innerHTML = `<span id="srchTagLabel">সব ট্যাগ</span><span class="srch-sel-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>`;
+  } else {
+    const chips = vals.map(t => {
+      const c = _tagColors[t];
+      const sty = c ? `color:${c};background:${c}18;border-color:${c}44;` : '';
+      return `<span class="srch-tag-chip" style="${sty}">#${t}</span>`;
+    }).join('');
+    btn.innerHTML = `<span id="srchTagLabel" class="srch-tag-chips-wrap">${chips}</span><span class="srch-sel-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>`;
+  }
+}
+
+window.setSrchTag = (val, el) => {
+  if (!val) {
+    window._srchTagVals = [];
+    const dd = document.getElementById('srchTagDd');
+    if (dd) dd.style.display = 'none';
+  } else {
+    const idx = window._srchTagVals.indexOf(val);
+    if (idx >= 0) window._srchTagVals.splice(idx, 1);
+    else window._srchTagVals.push(val);
+  }
+  _updateSrchTagBtn();
+  _buildSrchTagDd();
+  runSearch();
+};
+
+window.setSrchSort = (val, label, el) => {
+  window._srchSortVal = val;
+  const lbl = document.getElementById('srchSortLabel');
+  if (lbl) lbl.textContent = label;
+  document.querySelectorAll('#srchSortDd .srch-dd-item').forEach(i=>i.classList.toggle('srch-dd-active', i.dataset.val===val));
+  const dd = document.getElementById('srchSortDd');
+  if (dd) dd.style.display = 'none';
+  runSearch();
+};
+
+window.toggleSrchDd = (which, e) => {
+  if (e) e.stopPropagation();
+  const tagDd = document.getElementById('srchTagDd');
+  const sortDd = document.getElementById('srchSortDd');
+  if (which === 'tag') {
+    const open = tagDd.style.display !== 'none';
+    tagDd.style.display = open ? 'none' : 'block';
+    if (sortDd) sortDd.style.display = 'none';
+  } else {
+    const open = sortDd.style.display !== 'none';
+    sortDd.style.display = open ? 'none' : 'block';
+    if (tagDd) tagDd.style.display = 'none';
+  }
+};
+
+// Close search custom dropdowns on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('#srchTagWrap')) {
+    const d = document.getElementById('srchTagDd'); if (d) d.style.display='none';
+  }
+  if (!e.target.closest('#srchSortWrap')) {
+    const d = document.getElementById('srchSortDd'); if (d) d.style.display='none';
+  }
+});
+
+let _srchType = '', _srchAllPosts = [], _srchLoaded = false;
+window.openSearch = async () => {
+  document.getElementById('searchModal').style.display = 'flex';
+  setTimeout(()=>document.getElementById('srchMain').focus(),50);
+  if (!_srchLoaded) {
+    // Load ALL posts once for fast local search
+    const snap = await getDocs(query(collection(db,'posts'), orderBy('createdAt','desc')));
+    _srchAllPosts = snap.docs.map(d=>({id:d.id,...d.data()}));
+    _srchLoaded = true;
+    // Populate custom tag dropdown
+    await loadTags();
+    _buildSrchTagDd();
+  }
+  runSearch();
+};
+window.closeSearch = () => {
+  document.getElementById('searchModal').style.display='none';
+};
+window.setSrchType = (btn, val) => {
+  _srchType = val;
+  document.querySelectorAll('#typeFilters .srch-pill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  runSearch();
+};
+window.clearSearch = () => {
+  document.getElementById('srchMain').value='';
+  document.getElementById('srchClrBtn').style.display='none';
+  runSearch();
+};
+
+// ── PHONETIC / BANGLISH SEARCH ENGINE ──
+// Converts Banglish (Bengali typed in English) to Unicode Bengali for search
+const _phoneticMap = [
+  // Digraphs first (longest match priority)
+  ['ksh','ক্ষ'],['kkh','ক্ষ'],
+  ['sht','ষ্ট'],['shth','ষ্ঠ'],
+  ['ngg','ঙ্গ'],['ngh','ঙ'],
+  ['rri','ঋ'],['rr','ড়'],
+  ['shh','শ'],['sh','শ'],['Sh','ষ'],
+  ['kh','খ'],['gh','ঘ'],['ch','চ'],['jh','ঝ'],
+  ['Th','ঠ'],['Dh','ঢ'],['th','থ'],['dh','ধ'],
+  ['ph','ফ'],['bh','ভ'],['ng','ং'],
+  ['oo','উ'],['ee','ই'],['aa','আ'],['ii','ই'],
+  ['ou','ঔ'],['oi','ঐ'],
+  ['kk','ক্ক'],['tt','ত্ত'],['pp','প্প'],['ll','ল্ল'],['mm','ম্ম'],['nn','ন্ন'],['ss','স্স'],
+  // Singles
+  ['k','ক'],['K','ক'],
+  ['g','গ'],['G','গ'],
+  ['j','জ'],['J','জ'],['z','জ'],
+  ['T','ট'],['D','ড'],
+  ['t','ত'],['d','দ'],
+  ['n','ন'],['N','ন'],
+  ['p','প'],['b','ব'],
+  ['m','ম'],['r','র'],
+  ['l','ল'],
+  ['s','স'],['S','স'],
+  ['h','হ'],
+  ['y','য'],['w','ওয়'],
+  ['f','ফ'],['v','ভ'],['q','ক'],
+  ['x','ক্স'],
+  ['a','া'],['i','ি'],['u','ু'],
+  ['e','ে'],['o','ো'],
+  ['A','আ'],['E','এ'],['O','ও'],['I','ই'],['U','উ'],
+];
+
+// Common whole-word dictionary (Banglish word → Bengali word)
+const _phoneticDict = {
+  'ami':'আমি','amar':'আমার','amra':'আমরা','tumi':'তুমি','tomar':'তোমার',
+  'se':'সে','tar':'তার','ta':'তা','ei':'এই','oi':'ওই','je':'যে',
+  'ki':'কি','ke':'কে','keno':'কেন','kothay':'কোথায়','kothai':'কোথায়',
+  'ache':'আছে','chilo':'ছিল','hobe':'হবে','hoi':'হই','holo':'হলো',
+  'nam':'নাম','naam':'নাম','bhai':'ভাই','bon':'বোন','baba':'বাবা','ma':'মা',
+  'din':'দিন','rat':'রাত','shomoy':'সময়','somoy':'সময়',
+  'valo':'ভালো','bhalo':'ভালো','khub':'খুব','onek':'অনেক','aro':'আরো',
+  'kintu':'কিন্তু','tahole':'তাহলে','jodi':'যদি','ar':'আর','ebong':'এবং',
+  'islam':'ইসলাম','quran':'কুরআন','kuran':'কুরআন','hadith':'হাদিস',
+  'salah':'সালাহ','salat':'সালাত','namaz':'নামাজ','namaaz':'নামাজ',
+  'dawah':'দাওয়াহ','dawa':'দাওয়া','deen':'দ্বীন','din':'দ্বীন',
+  'ramadan':'রমাদান','romadan':'রমাদান','eid':'ঈদ',
+  'iftar':'ইফতার','sehri':'সেহরি','suhur':'সুহুর',
+  'masjid':'মসজিদ','mosque':'মসজিদ',
+  'alhamdulillah':'আলহামদুলিল্লাহ','inshallah':'ইনশাআল্লাহ',
+  'subhanallah':'সুবহানআল্লাহ','mashallah':'মাশাআল্লাহ',
+  'bangladesh':'বাংলাদেশ','dhaka':'ঢাকা','bangla':'বাংলা',
+  'shikkha':'শিক্ষা','shiksha':'শিক্ষা','biggyan':'বিজ্ঞান',
+  'manush':'মানুষ','manob':'মানব','jibon':'জীবন','jiban':'জীবন',
+  'shamai':'সমাজ','somaj':'সমাজ','desh':'দেশ',
+  'nari':'নারী','purush':'পুরুষ','shishu':'শিশু','tarun':'তরুণ','torun':'তরুণ',
+  'uddiptta':'উদ্দীপ্ত','uddippt':'উদ্দীপ্ত','uddipat':'উদ্দীপ্ত',
+  'sangha':'সংঘ','shongho':'সংঘ','community':'কমিউনিটি',
+  'karjokom':'কার্যক্রম','karjokrom':'কার্যক্রম','activities':'কার্যক্রম',
+  'nirdeshika':'নির্দেশিকা','guidelines':'নির্দেশিকা',
+  'shampratik':'সাম্প্রতিক','recent':'সাম্প্রতিক',
+  'blog':'ব্লগ','post':'পোস্ট',
+  'oikotan':'ঐক্যতান','brotherhood':'ভ্রাতৃত্ব',
+};
+
+function phoneticToBengali(text) {
+  // First try whole-word dictionary lookup on each word
+  const words = text.toLowerCase().split(/\s+/);
+  const translatedWords = words.map(word => {
+    const clean = word.replace(/[^a-zA-Z]/g,'');
+    return _phoneticDict[clean] || _phoneticDict[clean.toLowerCase()] || null;
+  });
+  const dictResult = translatedWords.every(Boolean) ? translatedWords.join(' ') : null;
+
+  // Also do character-level transliteration
+  let result = text;
+  let out = '';
+  let i = 0;
+  while (i < result.length) {
+    let matched = false;
+    for (const [rom, ben] of _phoneticMap) {
+      if (result.slice(i, i + rom.length) === rom) {
+        out += ben;
+        i += rom.length;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) { out += result[i]; i++; }
+  }
+
+  return { dict: dictResult, char: out };
+}
+
+function isAscii(str) {
+  return /^[\x00-\x7F]+$/.test(str);
+}
+
+function matchesQuery(p, q) {
+  const fields = [
+    (p.title||'').toLowerCase(),
+    (p.body||'').toLowerCase(),
+    (p.authorName||'').toLowerCase(),
+    ...(p.tags||[]).map(t=>t.toLowerCase()),
+  ];
+  // Direct match
+  if (fields.some(f => f.includes(q))) return true;
+  // If query is ASCII (Banglish), try phonetic conversion
+  if (isAscii(q)) {
+    const words = q.split(/\s+/);
+    for (const w of words) {
+      if (!w) continue;
+      const wl = w.toLowerCase();
+      // 1. Exact dictionary match
+      const exactBn = _phoneticDict[wl];
+      if (exactBn && fields.some(f => f.includes(exactBn))) return true;
+      // 2. Prefix match — "ift" matches "iftar" → ইফতার
+      const prefixMatches = Object.entries(_phoneticDict)
+        .filter(([key]) => key.startsWith(wl))
+        .map(([, val]) => val);
+      for (const bn of prefixMatches) {
+        if (fields.some(f => f.includes(bn))) return true;
+      }
+      // 3. Substring match in dict keys — "tar" matches "iftar"
+      const subMatches = Object.entries(_phoneticDict)
+        .filter(([key]) => key.includes(wl) && key !== wl)
+        .map(([, val]) => val);
+      for (const bn of subMatches) {
+        if (fields.some(f => f.includes(bn))) return true;
+      }
+    }
+    // 4. Character-level transliteration for unknown words
+    const { char } = phoneticToBengali(q);
+    if (char && char !== q && fields.some(f => f.includes(char))) return true;
+  }
+  return false;
+}
+
+window.runSearch = () => {
+  const q = (document.getElementById('srchMain')?.value||'').trim().toLowerCase();
+  const tag = window._srchTagVals||[];
+  const month = document.getElementById('srchMonth')?.value||'';
+  const sort = window._srchSortVal||'newest';
+  const clrBtn = document.getElementById('srchClrBtn');
+  if(clrBtn) clrBtn.style.display = q?'block':'none';
+
+  let posts = [..._srchAllPosts];
+
+  // Type filter
+  if (_srchType) posts = posts.filter(p=>p.type===_srchType);
+
+  // Text filter — supports Banglish/phonetic search
+  if (q) posts = posts.filter(p => matchesQuery(p, q));
+
+  // Tag filter — AND logic: post must have ALL selected tags
+  if (tag.length) posts = posts.filter(p=>tag.every(t=>(p.tags||[]).includes(t)));
+
+  // Month filter
+  if (month) posts = posts.filter(p=>{
+    if(!p.createdAt) return false;
+    const d=p.createdAt.toDate?p.createdAt.toDate():new Date(p.createdAt);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` === month;
+  });
+
+  // Sort
+  if (sort==='newest') posts.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+  else if (sort==='oldest') posts.sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0));
+  else if (sort==='liked') posts.sort((a,b)=>(b.likeCount||0)-(a.likeCount||0));
+  else if (sort==='viewed') posts.sort((a,b)=>(b.viewCount||0)-(a.viewCount||0));
+
+  const statusEl = document.getElementById('srchStatus');
+  const resultsEl = document.getElementById('srchResults');
+  if (!q && !tag && !month && !_srchType) {
+    statusEl.textContent = `মোট ${_srchAllPosts.length} টি পোস্ট আছে — ফিল্টার বা সার্চ করুন`;
+    resultsEl.innerHTML = '';
+    return;
+  }
+  statusEl.textContent = posts.length ? `${posts.length} টি ফলাফল` : '';
+  if (!posts.length) {
+    resultsEl.innerHTML = '<div class="srch-empty"><div style="font-size:2rem"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></div><p>কোনো ফলাফল পাওয়া যায়নি</p></div>';
+    return;
+  }
+  resultsEl.innerHTML = posts.map(p => {
+    const typeLabel = {blog:'কার্যক্রম',guideline:'নির্দেশিকা'}[p.type]||'কার্যক্রম';
+    const excerpt = (p.body||'').slice(0,100)+(p.body?.length>100?'…':'');
+    const tagsHtml = (p.tags||[]).slice(0,4).map(t=>_tagHtml(t)).join('');
+    const img = [p.imageUrl,...(p.images||[])].filter(Boolean)[0];
+    return `<div class="srch-item" onclick="closeSearch();openPost('${p.id}')">
+      ${img?`<div class="srch-item-img" style="background-image:url('${esc(img)}')"></div>`:''}
+      <div class="srch-item-body">
+        <div class="srch-item-meta">
+          <span class="card-type-badge ct-${p.type||'blog'}">${typeLabel}</span>
+          <span class="srch-item-time">${tAgo(p.createdAt)}</span>
+          <span class="srch-item-stat"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> ${p.likeCount||0}</span>
+          <span class="srch-item-stat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount||0}</span>
+        </div>
+        <div class="srch-item-title">${esc(p.title||'Untitled')}</div>
+        ${excerpt?`<div class="srch-item-excerpt">${esc(excerpt)}</div>`:''}
+        ${tagsHtml?`<div class="srch-item-tags">${tagsHtml}</div>`:''}
+        <div class="srch-item-author">
+          <img src="${esc(p.authorPhoto||'')}" onerror="this.style.display='none'"/>
+          <span>${esc(p.authorName||'')}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+};
+
+// ── CREATE POST ──
+window.openCreatePost = () => {
+  if (!currentUser) { toast('লগইন করুন','error'); return; }
+  loadTags();
+  _selectedTags = [];
+  _tcMode = ''; _tcTargetTag = '';
+  tagPickerRenderChips();
+  const si = document.getElementById('tagSearchInp'); if(si) { si.value=''; }
+  const dd = document.getElementById('tagDropdown'); if(dd) dd.style.display='none';
+  document.getElementById('createModal').style.display='flex';
+};
+
+// ── TAG PICKER ──
+let _selectedTags = [];
+let _tcMode = ''; // 'create' | 'editcolor'
+let _tcTargetTag = '';
+
+const TAG_PALETTE = [
+  {label:'সবুজ',    hex:'#5aad6b'},
+  {label:'আকাশি',  hex:'#4da8e0'},
+  {label:'কমলা',   hex:'#e8852a'},
+  {label:'বেগুনি', hex:'#9b72d4'},
+  {label:'লাল',    hex:'#e05a5a'},
+  {label:'হলুদ',   hex:'#d4b840'},
+  {label:'গোলাপি', hex:'#d46fa0'},
+  {label:'ধূসর',   hex:'#7a9880'},
+];
+
+function _tagStyle(t) {
+  const c = _tagColors[t];
+  if (!c) return '';
+  return `color:${c};border-color:${c}55;background:${c}18;`;
+}
+function _tagHtml(t, onclick='') {
+  const sty = _tagStyle(t);
+  const handler = onclick ? `onclick="${onclick}"` : '';
+  return `<span class="post-tag" style="${sty}" ${handler}>#${esc(t)}</span>`;
+}
+function _tagDotStyle(t) {
+  const c = _tagColors[t];
+  return c ? `background:${c};` : 'background:rgba(255,255,255,.2);';
+}
+
+function _buildColorPicker(tagName, existingColor, titleText, confirmLabel) {
+  const swatches = TAG_PALETTE.map(p => {
+    const active = p.hex === existingColor ? ' tc-swatch-active' : '';
+    return `<button class="tc-swatch${active}" title="${p.label}" style="background:${p.hex};" onclick="tcPickColor('${p.hex}',this)"></button>`;
+  }).join('');
+  const noColorActive = !existingColor ? ' tc-swatch-active' : '';
+  return `
+    <div class="tc-create-box" onclick="event.stopPropagation()">
+      <div class="tc-create-label">${titleText}</div>
+      <div class="tc-create-tag-preview" id="tcPreview" style="${_tagStyle(tagName)}">#${tagName}</div>
+      <div class="tc-create-label" style="margin-top:.5rem;">রঙ বেছে নিন</div>
+      <div class="tc-swatches">
+        <button class="tc-swatch tc-no-color${noColorActive}" title="রঙ নেই" onclick="tcPickColor('',this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        ${swatches}
+      </div>
+      <div class="tc-create-btns">
+        <button class="tc-cancel-btn" onclick="tcCancel()">বাতিল</button>
+        <button class="tc-confirm-btn" onclick="tcConfirm()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> ${confirmLabel}</button>
+      </div>
+    </div>`;
+}
+
+function tagPickerRender(filter='') {
+  if (_tcMode) return; // color picker is open — don't overwrite
+  const dd = document.getElementById('tagDropdown');
+  if (!dd) return;
+  const lower = filter.toLowerCase().trim();
+  let list = lower ? allTags.filter(t=>t.includes(lower)) : [...allTags];
+  list.sort((a,b)=>{
+    const aS = _selectedTags.includes(a), bS = _selectedTags.includes(b);
+    return aS===bS ? a.localeCompare(b) : aS ? 1 : -1;
+  });
+  const newTag = lower.replace(/[^\w\u0980-\u09FF-]/g,'');
+  const canCreate = newTag && !allTags.includes(newTag) && !_selectedTags.includes(newTag);
+  const canManageTags = ['maintainer','admin'].includes(currentRole);
+
+  const items = list.slice(0,20).map(t => {
+    const sel = _selectedTags.includes(t);
+    const sty = _tagStyle(t);
+    return `<div class="tag-dd-item ${sel?'tag-dd-sel':''}" style="${sty}" onclick="tagPickerPick('${t}')">
+      <span class="tag-dd-dot" style="${_tagDotStyle(t)}"></span>
+      <span class="tag-dd-label">#${t}</span>
+      <div class="tag-dd-actions">
+        ${sel ? '<span class="tag-dd-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>' : ''}
+        ${canManageTags ? `<button class="tag-color-btn" title="রঙ পরিবর্তন" onclick="tagEditColor('${t}',event)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg></button>` : ''}
+        ${canManageTags ? `<button class="tag-del-btn" title="মুছুন" onclick="deleteTag('${t}',event)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg></button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  dd.innerHTML = (canCreate
+    ? `<div class="tag-dd-new" onclick="tagPickerInitCreate('${newTag}',event)">+ "<strong>#${newTag}</strong>" তৈরি করুন</div>`
+    : '') + (items || '<div class="tag-dd-empty">কোনো ট্যাগ নেই</div>');
+  dd.style.display = 'block';
+}
+
+window.tagPickerInitCreate = (t, e) => {
+  if(e) e.stopPropagation();
+  _tcMode = 'create';
+  _tcTargetTag = t;
+  window._tcSelectedColor = '';
+  const dd = document.getElementById('tagDropdown');
+  if (!dd) return;
+  dd.innerHTML = _buildColorPicker(t, '', 'নতুন ট্যাগ তৈরি', 'তৈরি করুন');
+  dd.style.display = 'block';
+};
+
+window.tagEditColor = (t, e) => {
+  if(e) e.stopPropagation();
+  if (!['maintainer','admin'].includes(currentRole)) return;
+  _tcMode = 'editcolor';
+  _tcTargetTag = t;
+  window._tcSelectedColor = _tagColors[t] || '';
+  const dd = document.getElementById('tagDropdown');
+  if (!dd) return;
+  dd.innerHTML = _buildColorPicker(t, _tagColors[t]||'', `"#${t}" রঙ পরিবর্তন`, 'সংরক্ষণ');
+  dd.style.display = 'block';
+};
+
+window.tcPickColor = (hex, btn) => {
+  window._tcSelectedColor = hex;
+  document.querySelectorAll('.tc-swatch,.tc-no-color').forEach(s => s.classList.remove('tc-swatch-active'));
+  btn.classList.add('tc-swatch-active');
+  const preview = document.getElementById('tcPreview');
+  if (preview) {
+    if (hex) { preview.style.color=hex; preview.style.borderColor=hex+'60'; preview.style.background=hex+'20'; }
+    else { preview.style.color=''; preview.style.borderColor=''; preview.style.background=''; }
+  }
+};
+
+window.tcCancel = () => {
+  _tcMode = ''; _tcTargetTag = ''; window._tcSelectedColor = '';
+  tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+};
+
+window.tcConfirm = async () => {
+  const mode = _tcMode, tag = _tcTargetTag, color = window._tcSelectedColor||'';
+  _tcMode = ''; _tcTargetTag = ''; window._tcSelectedColor = '';
+
+  if (mode === 'create') {
+    if (_selectedTags.length >= 5) { toast('সর্বোচ্চ ৫টি ট্যাগ দেওয়া যাবে','error'); tagPickerRender(''); return; }
+    const saved = await saveTag(tag, color);
+    if (saved && !_selectedTags.includes(saved)) _selectedTags.push(saved);
+    document.getElementById('tagSearchInp').value = '';
+    tagPickerRenderChips();
+    tagPickerRender('');
+    _srchLoaded = false;
+    _buildSrchTagDd();
+  } else if (mode === 'editcolor') {
+    try {
+      await updateDoc(doc(db,'tags',tag), { color });
+      if (color) _tagColors[tag] = color;
+      else delete _tagColors[tag];
+      tagPickerRenderChips();
+      tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+      _buildSrchTagDd();
+      // Refresh button chips if this tag is selected in search
+      if (window._srchTagVals.includes(tag)) _updateSrchTagBtn();
+      toast('রঙ সংরক্ষিত হয়েছে');
+    } catch(err) { toast('সংরক্ষণ ব্যর্থ হয়েছে','error'); tagPickerRender(''); }
+  }
+};
+
+window.deleteTag = async (t, e) => {
+  e.stopPropagation();
+  if (!['maintainer','admin'].includes(currentRole)) return;
+  if (!confirm(`"#${t}" ট্যাগটি মুছে দেবেন?`)) return;
+  try {
+    await deleteDoc(doc(db,'tags',t));
+    allTags = allTags.filter(x=>x!==t);
+    delete _tagColors[t];
+    _selectedTags = _selectedTags.filter(x=>x!==t);
+    tagPickerRenderChips();
+    tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+    _srchLoaded = false;
+    window._srchTagVals = window._srchTagVals.filter(x=>x!==t);
+    _updateSrchTagBtn();
+    _buildSrchTagDd();
+    toast('ট্যাগ মুছে গেছে');
+  } catch(e2) { toast('মুছতে পারা যায়নি','error'); }
+};
+const _debouncedTagRender = debounce(val => { if (!_tcMode) tagPickerRender(val); }, 180);
+window.tagPickerOpen = async () => {
+  await loadTags();
+  if (!_tcMode) tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+};
+window.tagPickerSearch = async (val) => {
+  await loadTags();
+  _debouncedTagRender(val);
+};
+window.tagPickerToggle = async (e) => {
+  if(e) e.stopPropagation();
+  const dd = document.getElementById('tagDropdown');
+  if (dd.style.display === 'none') { await tagPickerOpen(); }
+  else { dd.style.display = 'none'; _tcMode = ''; _tcTargetTag = ''; }
+};
+window.tagPickerPick = (t) => {
+  if (_selectedTags.includes(t)) {
+    _selectedTags = _selectedTags.filter(x=>x!==t);
+  } else {
+    if (_selectedTags.length >= 5) { toast('সর্বোচ্চ ৫টি ট্যাগ দেওয়া যাবে','error'); return; }
+    _selectedTags.push(t);
+  }
+  tagPickerRenderChips();
+  tagPickerRender(document.getElementById('tagSearchInp')?.value||'');
+};
+function tagPickerRenderChips() {
+  const row = document.getElementById('tagChips');
+  if (!row) return;
+  row.innerHTML = _selectedTags.map(t => {
+    const c = _tagColors[t];
+    const sty = c ? `color:${c};border-color:${c}55;background:${c}20;` : '';
+    return `<span class="tag-chip" style="${sty}">#${t}<button onclick="tagPickerPick('${t}')">×</button></span>`;
+  }).join('');
+}
+window.tagPickerReset = () => { _selectedTags = []; tagPickerRenderChips(); };
+// Close dropdown on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.tag-picker-wrap')) {
+    const dd = document.getElementById('tagDropdown');
+    if (dd) dd.style.display = 'none';
+    _tcMode = ''; _tcTargetTag = '';
+  }
+});
+function parseTags() {
+  return [..._selectedTags].slice(0,5);
+}
+
+window.submitPost = async () => {
+  if (!currentUser) return;
+  const title = document.getElementById('ptitle').value.trim();
+  const body = document.getElementById('pbody').value.trim();
+  const type = document.getElementById('ptype').value;
+  const imgFiles = [...document.getElementById('pimg').files].slice(0,10);
+  const dateVal = document.getElementById('pdate').value;
+  if (!title) { toast('শিরোনাম দিন','error'); return; }
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true; btn.textContent = 'প্রকাশ হচ্ছে…';
+  try {
+    const createdAt = dateVal ? Timestamp.fromDate(new Date(dateVal)) : serverTimestamp();
+    const tags = parseTags();
+    const IMGBB_KEY = 'dfe17afe0b40c898b7354609b37f1d41';
+    const uploadImg = async file => {
+      try {
+        const base64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        const fd = new FormData();
+        fd.append('key', IMGBB_KEY);
+        fd.append('image', base64);
+        const resp = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body:fd });
+        const d = await resp.json();
+        return d.success ? d.data.url : '';
+      } catch(e) { console.error('Upload failed:', e); return ''; }
+    };
+    btn.textContent = 'ছবি আপলোড হচ্ছে…';
+    const urls = imgFiles.length ? (await Promise.all(imgFiles.map(uploadImg))).filter(Boolean) : [];
+    btn.textContent = 'সেভ হচ্ছে…';
+    await addDoc(collection(db,'posts'), {
+      title, body, type, tags, imageUrl:urls[0]||'', images:urls.slice(1),
+      authorId:currentUser.uid, authorName:currentUser.displayName,
+      authorPhoto:currentUser.photoURL, authorRole:currentRole,
+      createdAt, likeCount:0, commentCount:0, viewCount:0, likes:[], savedBy:[]
+    });
+    closeModal('createModal');
+    ['ptitle','pbody','pdate'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('pimg').value = '';
+    document.getElementById('imgPrev').innerHTML = '';
+    tagPickerReset();
+    document.getElementById('tagSearchInp').value = '';
+    toast('প্রকাশিত হয়েছে! بارك الله فيك');
+    _srchLoaded = false;
+  } catch(e) {
+    toast('প্রকাশ করা যায়নি: ' + (e.message||'অজানা ত্রুটি'), 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'প্রকাশ করুন';
+  }
+};
+
+window.prevImgs = inp => {
+  const prev = document.getElementById('imgPrev'); prev.innerHTML='';
+  [...inp.files].slice(0,10).forEach(file => {
+    const r=new FileReader(); r.onload=e=>{
+      const d=document.createElement('div');
+      d.style.cssText=`width:64px;height:64px;border-radius:7px;background:url('${e.target.result}') center/cover;border:1px solid rgba(255,255,255,.1);flex-shrink:0;`;
+      prev.appendChild(d);
+    }; r.readAsDataURL(file);
+  });
+};
+
+// ── PROFILE ──
+window.openProfile = async () => {
+  if (!currentUser) return;
+  const snap = await getDoc(doc(db,'users',currentUser.uid));
+  const ud = snap.data()||{};
+  const role = ud.role||'user';
+  const rc = {maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+  let savedHtml = '<p class="cmt-h">কোনো সেভ করা পোস্ট নেই</p>';
+  if (ud.savedPosts?.length) {
+    const snaps = await Promise.all(ud.savedPosts.slice(0,8).map(id=>getDoc(doc(db,'posts',id))));
+    const rows = snaps.filter(s=>s.exists()).map(s=>`<div class="spr" onclick="closeModal('profileModal');openPost('${s.id}')">
+      <span>${esc(s.data().title||'Untitled')}</span><span class="spd">${tAgo(s.data().createdAt)}</span></div>`).join('');
+    savedHtml = rows||'<p class="cmt-h">কোনো সেভ করা পোস্ট নেই</p>';
+  }
+  const canManage = role==='maintainer'||role==='admin';
+  const canPostRole = role==='maintainer'||role==='admin'||role==='worker';
+  document.getElementById('profileModal').innerHTML=`
+    <div class="mo" onclick="closeModal('profileModal')"></div>
+    <div class="mb profmb">
+      <button class="mcl" onclick="closeModal('profileModal')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      <div class="ph">
+        <img src="${esc(currentUser.photoURL||'')}" class="pav" onerror="this.style.display='none'"/>
+        <div><h2>${esc(currentUser.displayName||'')}</h2>
+        <p>${esc(currentUser.email||'')}</p>
+        <span class="role-badge" style="background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}50">${role}</span></div>
+      </div>
+      <div class="ptabs">
+        <button class="ptab active" onclick="swTab(this,'ts')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> সেভ</button>
+        ${canPostRole?`<button class="ptab" onclick="swTab(this,'tmy');loadMyPosts()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> আমার পোস্ট<span id="myPostsBadge" class="mp-badge"></span></button>`:''}
+        ${canManage?`<button class="ptab" onclick="swTab(this,'tm')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> সদস্য</button>`:''}
+        ${canManage?`<button class="ptab" onclick="swTab(this,'trp');loadReports()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> রিপোর্ট</button>`:''}
+        <button class="ptab" onclick="swTab(this,'tset')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> সেটিংস</button>
+      </div>
+      <div id="ts" class="tc active"><p class="tab-lbl">সেভ করা পোস্ট</p>${savedHtml}</div>
+      ${canPostRole?`<div id="tmy" class="tc">
+        <div class="mbh" style="align-items:center">
+          <p class="tab-lbl" style="margin:0">আমার পোস্ট · My Posts</p>
+          <input id="mpSrch" placeholder="শিরোনাম খুঁজুন…" oninput="filterMyPosts(this.value)"/>
+        </div>
+        <div id="myPostsList"><p class="cmt-h">লোড হচ্ছে…</p></div>
+      </div>`:''}
+      ${canManage?`<div id="tm" class="tc">
+        <div class="mbh"><p class="tab-lbl">সদস্য পরিচালনা</p>
+        <input id="msrch" placeholder="নাম বা ইমেইল খুঁজুন…" oninput="filterM(this.value)"/></div>
+        <div class="rfrow">
+          <button class="rf active" onclick="filterR(this,'all')">সব</button>
+          <button class="rf" onclick="filterR(this,'maintainer')">Maintainer</button>
+          <button class="rf" onclick="filterR(this,'admin')">Admin</button>
+          <button class="rf" onclick="filterR(this,'worker')">Worker</button>
+          <button class="rf" onclick="filterR(this,'user')">User</button>
+        </div>
+        <div id="mlist"><p class="cmt-h">লোড হচ্ছে…</p></div>
+      </div>`:''}
+      ${canManage?`<div id="trp" class="tc">
+        <p class="tab-lbl">রিপোর্টকৃত মন্তব্য · Reported Comments</p>
+        <div id="rplist"><p class="cmt-h">লোড হচ্ছে…</p></div>
+      </div>`:''}
+      <div id="tset" class="tc">
+        <p class="tab-lbl">অ্যাকাউন্ট</p>
+        <div class="sirows">
+          <div class="sir"><label>নাম</label><span>${esc(currentUser.displayName||'')}</span></div>
+          <div class="sir"><label>ইমেইল</label><span>${esc(currentUser.email||'')}</span></div>
+          <div class="sir"><label>ভূমিকা</label><span>${role}</span></div>
+          <div class="sir"><label>যোগ দিয়েছেন</label><span>${ud.createdAt?new Date(ud.createdAt.toDate()).toLocaleDateString('bn-BD'):'N/A'}</span></div>
+        </div>
+        <button class="danger-btn" onclick="logout()">সাইন আউট</button>
+      </div>
+    </div>`;
+  document.getElementById('profileModal').style.display='flex';
+  if (canManage) loadMembers();
+};
+
+window.swTab=(btn,id)=>{
+  document.querySelectorAll('.ptab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  const el = document.getElementById(id);
+  if (el) el.classList.add('active');
+};
+
+// ── MY POSTS TAB ──
+let _myPostsAll = [];
+window.loadMyPosts = async () => {
+  const list = document.getElementById('myPostsList');
+  const srch = document.getElementById('mpSrch');
+  if (!list || !currentUser) return;
+  if (srch) srch.style.display = '';
+  list.innerHTML = '<p class="cmt-h">লোড হচ্ছে…</p>';
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'posts'),
+      where('authorId', '==', currentUser.uid)
+    ));
+    _myPostsAll = snap.docs
+      .map(d => ({id: d.id, ...d.data()}))
+      .sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+    _renderMyPosts(_myPostsAll);
+    const badge = document.getElementById('myPostsBadge');
+    if (badge) badge.textContent = _myPostsAll.length || '';
+  } catch(e) {
+    console.error('loadMyPosts error:', e);
+    list.innerHTML = '<p class="cmt-h">লোড করতে ব্যর্থ হয়েছে: ' + (e.message||'') + '</p>';
+  }
+};
+function _renderMyPosts(posts) {
+  const list = document.getElementById('myPostsList');
+  if (!list) return;
+  if (!posts.length) { list.innerHTML = '<p class="cmt-h">কোনো পোস্ট নেই</p>'; return; }
+  const typeLabel = {blog:'ব্লগ', recent:'সাম্প্রতিক', guideline:'নির্দেশিকা'};
+  list.innerHTML = posts.map(p => `
+    <div class="mpr" onclick="closeModal('profileModal');openPost('${p.id}')">
+      <div class="mpr-main">
+        <span class="mpr-type ${p.type||''}">${typeLabel[p.type]||p.type||'পোস্ট'}</span>
+        <span class="mpr-title">${esc(p.title||'Untitled')}</span>
+      </div>
+      <div class="mpr-meta">
+        <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> ${tAgo(p.createdAt)}</span>
+        <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount||0}</span>
+        <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> ${p.likeCount||0}</span>
+        ${(p.tags||[]).length ? `<span class="mpr-tags">${(p.tags||[]).slice(0,2).map(t=>`<span class="mpr-tag">#${esc(t)}</span>`).join('')}</span>` : ''}
+      </div>
+    </div>`).join('');
+}
+window.filterMyPosts = (val) => {
+  const q = val.trim().toLowerCase();
+  _renderMyPosts(q ? _myPostsAll.filter(p => (p.title||'').toLowerCase().includes(q) || (p.body||'').toLowerCase().includes(q)) : _myPostsAll);
+};
+window.loadMembers = async () => {
+  if (_membersLoaded) { renderMembers(allMembers); return; }
+  const snap = await getDocs(collection(db,'users'));
+  allMembers = snap.docs.map(d => d.data());
+  _membersLoaded = true;
+  renderMembers(allMembers);
+};
+window.renderMembers = members => {
+  const list=document.getElementById('mlist'); if(!list)return;
+  const rc={maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+  const canP=currentRole==='maintainer', canA=currentRole==='admin';
+  list.innerHTML=`<div class="mstats">
+    <div class="msc">মোট <strong>${allMembers.length}</strong></div>
+    ${['maintainer','admin','worker','user','blocked'].map(r=>`<div class="msc">${r} <strong>${allMembers.filter(m=>m.role===r).length}</strong></div>`).join('')}
+  </div>`+members.map(m=>{
+    const ini=(m.name||'?').split(' ').map(c=>c[0]).join('').toUpperCase().slice(0,2);
+    // Chart: maintainer can assign maintainer/admin/worker/user/blocked (5 checks)
+    // admin can assign admin/worker/user (3 checks), NOT maintainer or blocked
+    const roles=canP?['maintainer','admin','worker','user','blocked']:canA?['admin','worker','user']:[];
+    return`<div class="mrow">
+      <div class="mav" style="background:${rc[m.role||'user']}25;color:${rc[m.role||'user']}">${ini}</div>
+      <div class="minf"><strong>${esc(m.name||'')}${m.uid===currentUser?.uid?' <span class="you">আপনি</span>':''}</strong><small>${esc(m.email||'')}</small></div>
+      <span class="role-badge" style="background:${rc[m.role||'user']}20;color:${rc[m.role||'user']};border:1px solid ${rc[m.role||'user']}40">${m.role||'user'}</span>
+      ${roles.length&&m.uid!==currentUser?.uid?`<div class="rbtns">${roles.map(r=>`<button class="rb ${r} ${m.role===r?'rba':''}" onclick="setRole('${m.uid}','${r}',this)">${r}</button>`).join('')}</div>`:''}
+    </div>`;
+  }).join('');
+};
+window.filterM=v=>renderMembers(allMembers.filter(m=>(m.name||'').toLowerCase().includes(v.toLowerCase())||(m.email||'').toLowerCase().includes(v.toLowerCase())));
+window.filterR=(btn,role)=>{document.querySelectorAll('.rf').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMembers(role==='all'?allMembers:allMembers.filter(m=>m.role===role));};
+
+window.loadReports = async () => {
+  const list = document.getElementById('rplist'); if (!list) return;
+  list.innerHTML = '<p class="cmt-h">লোড হচ্ছে…</p>';
+  try {
+    const snap = await getDocs(query(collection(db,'reports'), orderBy('reportedAt','desc')));
+    if (snap.empty) { list.innerHTML = '<p class="cmt-h"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> কোনো রিপোর্ট নেই</p>'; return; }
+    const items = await Promise.all(snap.docs.map(async d => {
+      const r = {id:d.id, ...d.data()};
+      // Use cached comment text/author from report if available, otherwise fetch live
+      let commentText = r.commentText||'', commentAuthor = r.commentAuthor||'', commentPhoto = r.commentPhoto||'', authorId = r.authorId||'';
+      if (!commentAuthor && r.pid && r.cid) {
+        try {
+          const cmSnap = await getDoc(doc(db,'posts',r.pid,'comments',r.cid));
+          if (cmSnap.exists()) { const cd=cmSnap.data(); commentText=cd.text||''; commentAuthor=cd.authorName||''; commentPhoto=cd.authorPhoto||''; authorId=cd.authorId||''; }
+        } catch(e) {}
+      }
+      let reporterName='', isBlockedUser=false;
+      try { const rs=await getDoc(doc(db,'users',r.reportedBy)); if(rs.exists()) reporterName=rs.data().name||''; } catch(e) {}
+      if (authorId) { try { const us=await getDoc(doc(db,'users',authorId)); if(us.exists()) isBlockedUser=us.data().role==='blocked'; } catch(e) {} }
+      return {r, commentText, commentAuthor, commentPhoto, authorId, reporterName, isBlockedUser};
+    }));
+    const pending = items.filter(i=>!i.r.resolved);
+    const resolved = items.filter(i=>i.r.resolved);
+    const renderItem = ({r,commentText,commentAuthor,commentPhoto,authorId,reporterName,isBlockedUser}) => {
+      const isResolved = !!r.resolved;
+      const resolvedBadge = isResolved ? `<span class="rp-resolved-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> ${esc(r.resolvedAction||'সমাধান হয়েছে')}</span>` : '';
+      return `<div class="rp-row${isResolved?' rp-resolved':''}" id="rprow-${r.id}">
+        <div class="rp-comment">
+          <img src="${esc(commentPhoto)}" onerror="this.style.display='none'" class="rp-av"/>
+          <div class="rp-body">
+            <div class="rp-author">${esc(commentAuthor||'অজানা')}${isBlockedUser?' <span class="rp-blocked-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> blocked</span>':''}${resolvedBadge}</div>
+            <div class="rp-text">${commentText?esc(commentText):'<em style="opacity:.6">মন্তব্য মুছে গেছে</em>'}</div>
+            <div class="rp-meta">রিপোর্ট: <strong>${esc(reporterName||r.reportedBy||'')}</strong> · ${tAgo(r.reportedAt)}</div>
+          </div>
+        </div>
+        ${!isResolved?`<div class="rp-actions">
+          ${commentText?`<button class="rp-btn rp-del" title="মন্তব্য মুছুন" onclick="reportDeleteComment('${r.pid}','${r.cid}','${r.id}','${esc(commentText)}','${esc(commentAuthor)}','${esc(commentPhoto)}','${authorId}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg></button>`:''}
+          ${authorId&&!isBlockedUser&&['admin','maintainer'].includes(currentRole)?`<button class="rp-btn rp-block" onclick="reportBlockUser('${authorId}','${r.id}','${esc(commentText)}','${esc(commentAuthor)}','${esc(commentPhoto)}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></button>`:''}
+          ${authorId&&isBlockedUser&&['admin','maintainer'].includes(currentRole)?`<button class="rp-btn rp-unblock" onclick="reportUnblockUser('${authorId}','${r.id}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg></button>`:''}
+        </div>`:''}
+      </div>`;
+    };
+    let html = '';
+    if (pending.length) html += `<div class="rp-section-lbl"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> অপেক্ষমাণ (${pending.length})</div>` + pending.map(renderItem).join('');
+    if (resolved.length) html += `<div class="rp-section-lbl rp-section-resolved"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> সমাধান হয়েছে (${resolved.length})</div>` + resolved.map(renderItem).join('');
+    list.innerHTML = html || '<p class="cmt-h"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> কোনো রিপোর্ট নেই</p>';
+  } catch(e) { list.innerHTML = '<p class="cmt-h" style="color:var(--red)">লোড করা যায়নি</p>'; console.error(e); }
+};
+
+window.reportDeleteComment = async (pid, cid, rid, commentText, commentAuthor, commentPhoto, authorId) => {
+  if (!confirm('এই মন্তব্য মুছে দেবেন?')) return;
+  try {
+    await deleteDoc(doc(db,'posts',pid,'comments',cid));
+    await updateDoc(doc(db,'posts',pid),{commentCount:increment(-1)});
+    // Mark report as resolved, cache comment info so history is preserved
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'মন্তব্য মুছে দেওয়া হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp(),
+      commentText, commentAuthor, commentPhoto, authorId
+    });
+    toast('মন্তব্য মুছে গেছে');
+    loadReports();
+  } catch(e) { toast('মুছতে পারা যায়নি','error'); }
+};
+window.reportBlockUser = async (uid, rid, commentText, commentAuthor, commentPhoto) => {
+  if (!['admin','maintainer'].includes(currentRole)) { toast('অনুমতি নেই','error'); return; }
+  if (!confirm('এই ব্যবহারকারীকে ব্লক করবেন?')) return;
+  try {
+    await updateDoc(doc(db,'users',uid),{role:'blocked'});
+    allMembers=allMembers.map(m=>m.uid===uid?{...m,role:'blocked'}:m);
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'ব্যবহারকারী ব্লক করা হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp(),
+      commentText, commentAuthor, commentPhoto, authorId:uid
+    });
+    toast('ব্লক করা হয়েছে');
+    loadReports();
+  } catch(e) { toast('ব্লক করা যায়নি','error'); }
+};
+window.reportUnblockUser = async (uid, rid) => {
+  if (!['admin','maintainer'].includes(currentRole)) { toast('অনুমতি নেই','error'); return; }
+  if (!confirm('আনব্লক করবেন?')) return;
+  try {
+    await updateDoc(doc(db,'users',uid),{role:'user'});
+    allMembers=allMembers.map(m=>m.uid===uid?{...m,role:'user'}:m);
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'ব্যবহারকারী আনব্লক করা হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp()
+    });
+    toast('আনব্লক করা হয়েছে');
+    loadReports();
+  } catch(e) { toast('আনব্লক করা যায়নি','error'); }
+};
+window.dismissReport = async rid => {
+  try {
+    await updateDoc(doc(db,'reports',rid),{
+      resolved:true, resolvedAction:'বাতিল করা হয়েছে',
+      resolvedBy:currentUser.uid, resolvedAt:serverTimestamp()
+    });
+    toast('রিপোর্ট বাতিল করা হয়েছে');
+    loadReports();
+  } catch(e) { toast('বাতিল করা যায়নি','error'); }
+};
+
+window.setRole = async (uid, role, btn) => {
+  try {
+    await updateDoc(doc(db,'users',uid), {role});
+    const rc = {maintainer:'#a8cc5a',admin:'#e05c5c',worker:'#5aaee0',user:'#888'};
+    const row = btn.closest('.mrow');
+    row.querySelectorAll('.rb').forEach(b => b.classList.remove('rba')); btn.classList.add('rba');
+    const badge = row.querySelector('.role-badge');
+    badge.textContent = role; badge.style.cssText = `background:${rc[role]}20;color:${rc[role]};border:1px solid ${rc[role]}40`;
+    allMembers = allMembers.map(m => m.uid===uid ? {...m,role} : m);
+    toast(`ভূমিকা → ${role}`);
+  } catch(e) { toast('ভূমিকা পরিবর্তন ব্যর্থ হয়েছে','error'); }
+};
+
+// ── UTILS ──
+window.closeModal = id => {
+  document.getElementById(id).style.display = 'none';
+  if (id === 'postModal' && _unsubCmList) { _unsubCmList(); _unsubCmList = null; }
+};
+window.closeAllModals = () => {
+  ['postModal','createModal','profileModal'].forEach(id => document.getElementById(id).style.display = 'none');
+  if (_unsubCmList) { _unsubCmList(); _unsubCmList = null; }
+};
+window.toast=(msg,type='success')=>{
+  const t=document.getElementById('toast');t.textContent=msg;
+  t.className='toast show '+type;setTimeout(()=>t.classList.remove('show'),3000);
+};
+window.addEventListener('load', () => loadPosts('recent'));
+
+// LIGHTBOX
+let _lbImgs = [], _lbIdx = 0;
+window.openLightbox = (idx) => {
+  _lbImgs = window._postImgs || [];
+  _lbIdx = idx || 0;
+  renderLightbox();
+  document.getElementById('lightbox').style.display = 'flex';
+};
+function renderLightbox() {
+  const lb = document.getElementById('lightbox');
+  const total = _lbImgs.length;
+  lb.querySelector('.lb-img').style.backgroundImage = "url('" + _lbImgs[_lbIdx] + "')";
+  lb.querySelector('.lb-counter').textContent = total > 1 ? (_lbIdx+1) + ' / ' + total : '';
+  lb.querySelector('.lb-prev').style.display = total > 1 ? 'flex' : 'none';
+  lb.querySelector('.lb-next').style.display = total > 1 ? 'flex' : 'none';
+}
+window.lbPrev = () => { _lbIdx = (_lbIdx - 1 + _lbImgs.length) % _lbImgs.length; renderLightbox(); };
+window.lbNext = () => { _lbIdx = (_lbIdx + 1) % _lbImgs.length; renderLightbox(); };
+window.closeLightbox = () => { document.getElementById('lightbox').style.display = 'none'; };
+
+// ── THEME SWITCHER ──
+const _themeKey = 'uts-theme';
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const icon = theme === 'light' ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>` : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.innerHTML = icon;
+  const fab = document.getElementById('themeToggleFab');
+  if (fab) fab.innerHTML = icon;
+  localStorage.setItem(_themeKey, theme);
+}
+window.toggleTheme = () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  applyTheme(cur === 'light' ? 'dark' : 'light');
+};
+// Apply saved or system theme on load
+(function(){
+  const saved = localStorage.getItem(_themeKey);
+  if (saved) { applyTheme(saved); }
+  else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) { applyTheme('light'); }
+  else { applyTheme('dark'); }
+})();
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openSearch(); return; }
+  const lb = document.getElementById('lightbox');
+  if (lb && lb.style.display === 'flex') {
+    if (e.key === 'ArrowLeft') lbPrev();
+    else if (e.key === 'ArrowRight') lbNext();
+    else if (e.key === 'Escape') closeLightbox();
+  }
+});
+</script>
+
+<style>
+:root{
+  /* Primary – Electric Blue */
+  --blue:#0066ff;--blue2:#1a7fff;--blue3:#3d96ff;--blue4:#80bfff;--blue5:#cce4ff;
+  /* Accent – Bright Orange */
+  --orange:#ff5500;--orange2:#ff6a00;--orange3:#ff8c33;--orange4:#ffb380;
+  /* Neutrals */
+  --red:#e03030;
+  /* Dark BG – deep electric navy */
+  --bg:#02091a;--bg2:#040e24;--bg3:#06132e;
+  --card:#081428;--card2:#0a1830;--brd:#0f2850;--brd2:#183870;
+  --txt:#e8f0ff;--txt2:#6a80b8;--txt3:#3a4e80;
+  /* Shadows */
+  --sh:0 8px 32px rgba(0,20,80,.8);
+  --sh2:0 2px 8px rgba(0,20,80,.5);
+  --r:10px;--r2:14px;
+  --trans:all .22s cubic-bezier(.4,0,.2,1);
+  --olive:var(--blue);--olive2:var(--blue2);--olive3:var(--blue3);--olive4:var(--blue4);
+  --sky:var(--blue);--sky2:var(--blue2);--sky3:var(--blue3);
+  --navy:#02091a;--navy2:#040e24;--navy3:#06132e;--navy4:#0f2850;
+}
+[data-theme="light"]{
+  --bg:#f7f9ff;--bg2:#edf0ff;--bg3:#e0e6ff;
+  --card:#ffffff;--card2:#f3f5ff;--brd:#c8d2f0;--brd2:#a8b8e0;
+  --txt:#050a20;--txt2:#2c3a70;--txt3:#6070a0;
+  --sh:0 8px 32px rgba(0,30,120,.12);
+  --sh2:0 2px 8px rgba(0,30,120,.07);
+  --blue:#0055e6;--blue2:#0066ff;--blue3:#1a7fff;--blue4:#3d96ff;--blue5:#cce4ff;
+  --orange:#e84800;--orange2:#ff5500;--orange3:#ff7a1a;--orange4:#ffa366;
+  --olive:var(--blue);--olive2:var(--blue2);--olive3:var(--blue3);--olive4:var(--blue4);
+  --sky:var(--blue);--sky2:var(--blue2);--sky3:var(--blue3);
+}
+
+/* ── GLOBAL ANIMATION KEYFRAMES ── */
+@keyframes fadeInUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmerSlide{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes navGlow{0%,100%{box-shadow:0 1px 40px rgba(0,0,0,.5),0 0 60px rgba(0,102,255,.08)}50%{box-shadow:0 1px 40px rgba(0,0,0,.5),0 0 80px rgba(0,102,255,.18)}}
+@keyframes heroPulseBlue{0%,100%{opacity:.7}50%{opacity:1}}
+@keyframes orangePing{0%{transform:scale(1);opacity:1}80%,100%{transform:scale(1.5);opacity:0}}
+@keyframes floatUp{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+/* ── LIGHT: TOGGLE BUTTONS ── */
+.theme-toggle{
+  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
+  border-radius:8px;color:rgba(255,255,255,.7);width:34px;height:34px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:1rem;transition:var(--trans);flex-shrink:0;
+}
+.theme-toggle:hover{background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.25);}
+[data-theme="light"] .theme-toggle{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.25);color:rgba(255,255,255,.9);}
+[data-theme="light"] .theme-toggle:hover{background:rgba(255,255,255,.25);color:#fff;border-color:rgba(255,255,255,.4);}
+/* Floating theme toggle — visible only on mobile */
+.theme-toggle-fab{
+  display:none;position:fixed;right:0;top:50%;transform:translateY(-50%);
+  z-index:190;background:rgba(0,20,60,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border:1px solid rgba(0,102,255,.2);border-right:none;border-radius:10px 0 0 10px;
+  width:32px;height:52px;cursor:pointer;align-items:center;justify-content:center;
+  font-size:1.05rem;box-shadow:-3px 0 18px rgba(0,0,0,.35);transition:var(--trans);
+}
+.theme-toggle-fab:hover{background:rgba(10,12,30,.97);width:36px;}
+[data-theme="light"] .theme-toggle-fab{background:rgba(0,30,90,.92);border-color:rgba(0,102,255,.35);color:rgba(255,255,255,.8);box-shadow:-3px 0 18px rgba(0,0,0,.3);}
+[data-theme="light"] .theme-toggle-fab:hover{background:rgba(0,50,150,.97);color:#fff;}
+@media(max-width:640px){.theme-toggle{display:none;}.theme-toggle-fab{display:flex;}}
+/* ── LIGHT: NAV ── */
+[data-theme="light"] nav{background:linear-gradient(135deg,rgba(0,40,160,.97) 0%,rgba(0,80,220,.95) 50%,rgba(0,50,180,.97) 100%);border-bottom:1px solid rgba(0,102,255,.4);box-shadow:0 1px 30px rgba(0,0,0,.2),0 0 60px rgba(0,102,255,.15);}
+[data-theme="light"] .nav-logo-text strong{background:linear-gradient(100deg,#ffffff 0%,#d0e8ff 45%,#ffc080 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+[data-theme="light"] .nav-logo-text em{color:rgba(180,220,255,.7);}
+[data-theme="light"] .nav-tab{color:rgba(255,255,255,.7);}
+[data-theme="light"] .nav-tab:hover{background:rgba(255,255,255,.12);color:#fff;}
+[data-theme="light"] .nav-tab.active{color:#fff;}
+[data-theme="light"] .nav-tab.active::after{background:linear-gradient(90deg,transparent,var(--orange2),transparent);box-shadow:0 0 8px rgba(255,102,0,.5);}
+[data-theme="light"] .nav-search-btn{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.8);}
+[data-theme="light"] .nav-search-btn:hover{background:rgba(255,255,255,.2);color:#fff;}
+[data-theme="light"] #loginBtn{background:linear-gradient(135deg,#fff,#e0ecff);color:#0044cc;box-shadow:0 2px 12px rgba(0,0,0,.2);}
+[data-theme="light"] .pa-btn{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.22);color:#fff;}
+[data-theme="light"] .pa-btn:hover{background:rgba(255,255,255,.2);}
+[data-theme="light"] #newPostBtn{background:linear-gradient(135deg,#ff5500,#ff7700);box-shadow:0 2px 12px rgba(255,85,0,.35);}
+/* ── LIGHT: HERO ── */
+[data-theme="light"] .hero{background:linear-gradient(160deg,#011840 0%,#022a70 35%,#0050c0 65%,#0038a0 80%,#011840 100%);}
+[data-theme="light"] .hero::before{
+  background-image:radial-gradient(ellipse at 15% 60%,rgba(100,180,255,.2) 0%,transparent 55%),radial-gradient(ellipse at 85% 25%,rgba(0,150,255,.18) 0%,transparent 45%),radial-gradient(ellipse at 55% 85%,rgba(255,102,0,.1) 0%,transparent 40%),radial-gradient(rgba(100,180,255,.06) 1px,transparent 1px);
+  background-size:100% 100%,100% 100%,100% 100%,28px 28px;
+}
+[data-theme="light"] .hero::after{background:linear-gradient(90deg,transparent,rgba(100,180,255,.5),rgba(255,102,0,.3),transparent);}
+[data-theme="light"] .hero-ar{color:rgba(200,230,255,.85);}
+[data-theme="light"] .hero h1{background:linear-gradient(110deg,#80c8ff 0%,#ffffff 45%,#ffa060 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+[data-theme="light"] .hero p{color:rgba(200,225,255,.9);}
+/* ── LIGHT: SECTION & GRID ── */
+[data-theme="light"] .sec-title{color:#0044cc;}
+[data-theme="light"] .sec-title::before{background:linear-gradient(to bottom,#ff6600,#ff3300);box-shadow:0 0 8px rgba(255,80,0,.4);}
+/* ── LIGHT: CARDS ── */
+[data-theme="light"] .card{background:#fff;border-color:rgba(0,80,220,.2);box-shadow:0 4px 20px rgba(0,30,100,.1),inset 0 1px 0 rgba(0,102,255,.04);}
+[data-theme="light"] .card::before{background:linear-gradient(135deg,rgba(0,102,255,.04) 0%,transparent 60%);}
+[data-theme="light"] .card:hover{border-color:rgba(0,80,220,.6);box-shadow:0 16px 40px rgba(0,20,100,.16),0 0 0 1px rgba(0,80,220,.2),0 0 30px rgba(0,102,255,.06);}
+[data-theme="light"] .card-img-wrap{background:var(--bg2);}
+[data-theme="light"] .card-author{color:#3a4e90;}
+[data-theme="light"] .card-title{color:#050a20;}
+[data-theme="light"] .card-excerpt{color:#2c3a70;}
+[data-theme="light"] .ct-blog{background:rgba(0,102,255,.1);color:#0060dd;border-color:rgba(0,102,255,.22);}
+[data-theme="light"] .ct-guideline{background:rgba(255,85,0,.1);color:#cc4400;border-color:rgba(255,85,0,.22);}
+[data-theme="light"] .ct-recent{background:rgba(0,102,255,.12);color:#0055cc;border-color:rgba(0,102,255,.25);}
+[data-theme="light"] .post-tag{color:#0055cc;background:rgba(0,102,255,.08);border-color:rgba(0,102,255,.2);}
+[data-theme="light"] .post-tag:hover{background:rgba(0,80,220,.15);border-color:rgba(0,102,255,.4);}
+[data-theme="light"] .card-footer-row{color:#3a4e90;}
+[data-theme="light"] .cact{border-top-color:rgba(0,80,220,.12);}
+[data-theme="light"] .ca{color:#3a4e90;border-right-color:rgba(0,80,220,.1);}
+[data-theme="light"] .ca:hover{background:rgba(0,102,255,.05);color:var(--txt);}
+[data-theme="light"] .ca.cal{color:var(--blue2);}
+[data-theme="light"] .ca.cas{color:var(--orange2);}
+[data-theme="light"] .shimmer{background:linear-gradient(100deg,#edf0ff 25%,#dce5ff 50%,#edf0ff 75%);background-size:200% 100%;}
+/* ── LIGHT: ABOUT & FOOTER ── */
+[data-theme="light"] .about-section{background:linear-gradient(160deg,#080c24 0%,#0a0f2e 50%,#07091c 100%);border-top:1px solid rgba(0,102,255,.2);}
+[data-theme="light"] footer{background:#07091c;border-top:1px solid rgba(0,102,255,.12);}
+[data-theme="light"] footer p{color:rgba(180,200,255,.5);}
+/* ── LIGHT: MODALS ── */
+[data-theme="light"] .modal .mb{background:#fff;border-color:rgba(0,80,220,.15);box-shadow:0 24px 80px rgba(0,30,100,.15);}
+[data-theme="light"] .mcl{background:rgba(0,0,0,.06);border-color:rgba(0,0,0,.12);color:var(--txt2);}
+[data-theme="light"] .mcl:hover{background:rgba(0,0,0,.12);color:var(--txt);}
+[data-theme="light"] .mo{background:rgba(0,0,0,.4);}
+[data-theme="light"] input,[data-theme="light"] textarea,[data-theme="light"] select{background:rgba(0,0,0,.04);border-color:var(--brd);color:var(--txt);}
+[data-theme="light"] input:focus,[data-theme="light"] textarea:focus{border-color:var(--olive3);box-shadow:0 0 0 3px rgba(0,102,255,.12);}
+[data-theme="light"] input::placeholder,[data-theme="light"] textarea::placeholder{color:var(--txt3);}
+[data-theme="light"] .fg label{color:var(--txt2);}
+/* ── LIGHT: SEARCH MODAL ── */
+[data-theme="light"] .srch-modal-box{background:rgba(240,242,255,.99);border-color:rgba(0,60,200,.14);box-shadow:0 24px 80px rgba(0,0,0,.15);}
+[data-theme="light"] .srch-hd{border-bottom-color:rgba(0,20,80,.06);}
+[data-theme="light"] .srch-input-wrap{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.12);}
+[data-theme="light"] .srch-input-wrap:focus-within{border-color:rgba(0,80,220,.6);box-shadow:0 0 0 3px rgba(0,102,255,.12);}
+[data-theme="light"] .srch-input-wrap svg{color:rgba(0,0,0,.3);}
+[data-theme="light"] .srch-input-wrap input{color:var(--txt);}
+[data-theme="light"] .srch-input-wrap input::placeholder{color:rgba(0,0,0,.3);}
+[data-theme="light"] .srch-clr-btn{color:rgba(0,0,0,.35);}
+[data-theme="light"] .srch-clr-btn:hover{color:var(--txt);}
+[data-theme="light"] .srch-close-btn{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.12);color:rgba(0,0,0,.45);}
+[data-theme="light"] .srch-close-btn:hover{background:rgba(0,0,0,.1);color:var(--txt);}
+[data-theme="light"] .srch-filters{border-bottom-color:rgba(0,0,0,.07);}
+[data-theme="light"] .srch-filter-label{color:var(--txt2);}
+[data-theme="light"] .srch-pill{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:rgba(0,0,0,.5);}
+[data-theme="light"] .srch-pill:hover{color:var(--txt);border-color:rgba(0,0,0,.25);}
+[data-theme="light"] .srch-pill.active{background:rgba(0,60,200,.14);color:var(--olive);border-color:rgba(0,80,220,.55);}
+[data-theme="light"] .srch-month-inp{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:var(--txt);color-scheme:light;}
+[data-theme="light"] .srch-custom-sel-btn{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:var(--txt);}
+[data-theme="light"] .srch-custom-sel-btn:hover{border-color:rgba(0,80,220,.55);background:rgba(0,20,80,.06);}
+[data-theme="light"] .srch-custom-sel-dd{background:var(--card);border-color:var(--brd);box-shadow:0 10px 32px rgba(0,0,0,.15);}
+[data-theme="light"] .srch-dd-item{color:var(--txt2);}
+[data-theme="light"] .srch-dd-item:hover{background:rgba(0,0,0,.05);color:var(--txt);}
+[data-theme="light"] .srch-dd-active{color:var(--olive);background:rgba(0,102,255,.1);}
+[data-theme="light"] .srch-status{color:var(--txt2);border-bottom-color:rgba(0,0,0,.06);}
+[data-theme="light"] .srch-item{border-bottom-color:rgba(0,0,0,.06);}
+[data-theme="light"] .srch-item:hover{background:rgba(0,0,0,.04);}
+[data-theme="light"] .srch-item-title{color:var(--txt);}
+[data-theme="light"] .srch-tag-chip{background:rgba(0,0,0,.06);border-color:rgba(0,0,0,.12);color:var(--txt2);}
+/* ── LIGHT: COMMENT BOX ── */
+[data-theme="light"] #commentBox{background:rgba(240,242,255,.99);border-color:rgba(0,60,200,.14);box-shadow:0 16px 48px rgba(0,0,0,.15);}
+[data-theme="light"] .cb-header{background:rgba(0,0,0,.03);border-bottom-color:rgba(0,0,0,.07);color:var(--txt);}
+[data-theme="light"] .cb-close-btn{background:rgba(0,0,0,.06);border-color:rgba(0,0,0,.12);color:var(--txt2);}
+[data-theme="light"] .cmi{border-bottom-color:var(--brd);}
+/* ── LIGHT: TAG PICKER ── */
+[data-theme="light"] .tag-dropdown-box{background:var(--card);border-color:var(--brd);box-shadow:0 10px 32px rgba(0,0,0,.12);}
+[data-theme="light"] .tag-dd-item{color:var(--txt2);}
+[data-theme="light"] .tag-dd-item:hover{background:rgba(0,0,0,.04);color:var(--txt);}
+[data-theme="light"] .tag-dd-new{color:var(--olive2);}
+[data-theme="light"] .tag-dd-empty{color:var(--txt3);}
+/* ── LIGHT: PROFILE ── */
+[data-theme="light"] .ptab{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:var(--txt2);}
+[data-theme="light"] .ptab:hover{background:rgba(0,0,0,.09);color:var(--txt);}
+[data-theme="light"] .ptab.active{background:rgba(0,102,255,.12);color:var(--olive);border-color:rgba(0,80,220,.5);}
+[data-theme="light"] .spr{background:rgba(0,0,0,.04);border-color:var(--brd);}
+[data-theme="light"] .spr:hover{background:rgba(0,20,80,.06);}
+[data-theme="light"] .mrow{background:rgba(0,0,0,.03);border-color:var(--brd);}
+[data-theme="light"] .mrow:hover{background:rgba(0,0,0,.06);}
+[data-theme="light"] .sir{border-bottom-color:var(--brd);}
+
+/* ── LIGHT: PROFILE MODAL FULL ── */
+[data-theme="light"] .profmb{background:var(--card);}
+[data-theme="light"] .ph{border-bottom-color:var(--brd);}
+[data-theme="light"] .ph h2{color:var(--txt);}
+[data-theme="light"] .ph p{color:var(--txt2);}
+[data-theme="light"] .ptabs{border-bottom-color:var(--brd);}
+[data-theme="light"] .tab-lbl{color:var(--txt3);}
+[data-theme="light"] .spd{color:var(--txt3);}
+/* search inputs in profile */
+[data-theme="light"] .mbh input{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.12);color:var(--txt);}
+[data-theme="light"] .mbh input::placeholder{color:var(--txt3);}
+[data-theme="light"] .mbh input:focus{border-color:rgba(0,80,220,.55);}
+/* filter role buttons */
+[data-theme="light"] .rf{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.1);color:var(--txt2);}
+[data-theme="light"] .rf:hover{background:rgba(0,20,80,.06);color:var(--txt);}
+[data-theme="light"] .rf.active{background:rgba(0,102,255,.12);color:var(--olive);border-color:rgba(0,80,220,.5);}
+/* member stats */
+[data-theme="light"] .msc{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.1);color:var(--txt2);}
+[data-theme="light"] .msc strong{color:var(--txt);}
+/* member rows */
+[data-theme="light"] .mrow{background:rgba(0,0,0,.03);border-color:var(--brd);}
+[data-theme="light"] .mrow:hover{background:rgba(0,0,0,.06);}
+[data-theme="light"] .minf strong{color:var(--txt);}
+[data-theme="light"] .minf small{color:var(--txt2);}
+/* role assign buttons */
+[data-theme="light"] .rb{border-color:rgba(0,0,0,.1);color:rgba(0,0,0,.35);}
+[data-theme="light"] .rb.maintainer.rba,[data-theme="light"] .rb.maintainer:hover{background:rgba(0,102,255,.12);color:var(--olive);border-color:rgba(0,80,220,.5);}
+[data-theme="light"] .rb.admin.rba,[data-theme="light"] .rb.admin:hover{background:rgba(200,60,60,.1);color:#c04040;border-color:rgba(200,60,60,.3);}
+[data-theme="light"] .rb.worker.rba,[data-theme="light"] .rb.worker:hover{background:rgba(0,102,255,.1);color:var(--sky2);border-color:rgba(42,114,168,.3);}
+[data-theme="light"] .rb.user.rba,[data-theme="light"] .rb.user:hover{background:rgba(0,0,0,.07);color:var(--txt2);border-color:rgba(0,0,0,.2);}
+/* settings rows */
+[data-theme="light"] .sir{border-bottom-color:var(--brd);}
+[data-theme="light"] .sir label{color:var(--txt3);}
+[data-theme="light"] .sir span{color:var(--txt);}
+/* saved posts list */
+[data-theme="light"] .spr{background:rgba(0,0,0,.04);border-color:var(--brd);color:var(--txt);}
+[data-theme="light"] .spr:hover{background:rgba(0,20,80,.06);border-color:rgba(100,160,40,.3);}
+[data-theme="light"] .spd{color:var(--txt3);}
+/* danger button */
+[data-theme="light"] .danger-btn{background:rgba(180,40,40,.07);border-color:rgba(180,40,40,.2);color:#b83030;}
+[data-theme="light"] .danger-btn:hover{background:var(--red);color:#fff;border-color:var(--red);}
+/* create modal cancel button */
+[data-theme="light"] .canbtn{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:var(--txt2);}
+[data-theme="light"] .canbtn:hover{background:rgba(0,0,0,.09);color:var(--txt);}
+/* My Posts tab */
+[data-theme="light"] .mpr{background:var(--card2);border-color:var(--brd);}
+[data-theme="light"] .mpr:hover{background:var(--card);border-color:rgba(100,160,40,.3);}
+[data-theme="light"] .mpr-title{color:var(--txt);}
+[data-theme="light"] .mpr-meta{color:var(--txt3);}
+[data-theme="light"] .mpr-tag{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.1);color:var(--txt3);}
+[data-theme="light"] .mp-badge{background:var(--blue2);}
+/* report panel */
+[data-theme="light"] .rp-section-lbl{color:var(--txt3);border-bottom-color:var(--brd);}
+[data-theme="light"] .rp-section-resolved{color:var(--olive2);}
+[data-theme="light"] .rp-item{border-color:var(--brd);background:var(--card2);}
+[data-theme="light"] .rp-item:hover{background:var(--card);}
+[data-theme="light"] .rp-author{color:var(--txt2);}
+[data-theme="light"] .rp-text{color:var(--txt);background:rgba(0,0,0,.03);}
+[data-theme="light"] .rp-resolved-badge{background:rgba(0,102,255,.12);color:var(--olive);}
+[data-theme="light"] .rp-blocked-badge{background:rgba(180,40,40,.1);color:#c03030;}
+[data-theme="light"] .rp-btn{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.12);color:var(--txt2);}
+[data-theme="light"] .rp-btn:hover{background:rgba(0,0,0,.09);color:var(--txt);}
+[data-theme="light"] .rp-del:hover{background:rgba(180,40,40,.1);color:#b83030;border-color:rgba(180,40,40,.25);}
+[data-theme="light"] .rp-block:hover{background:rgba(180,40,40,.1);color:#b83030;}
+[data-theme="light"] .rp-unblock:hover{background:rgba(0,102,255,.12);color:var(--olive);}
+/* comment elements */
+[data-theme="light"] .cm-pin-badge{background:rgba(0,102,255,.12);color:var(--olive);}
+[data-theme="light"] .reply-ref{background:rgba(0,102,255,.08);border-left-color:var(--sky2);color:var(--sky2);}
+[data-theme="light"] .reply-chip{background:rgba(0,102,255,.08);border-color:rgba(0,102,255,.25);color:var(--sky2);}
+[data-theme="light"] .cmi{background:rgba(0,0,0,.02);}
+[data-theme="light"] .cmi strong{color:var(--txt);}
+[data-theme="light"] .cmi p{color:var(--txt2);}
+[data-theme="light"] .cmt{color:var(--txt3);}
+/* lightbox */
+[data-theme="light"] #lightbox{background:rgba(0,0,0,.85);}
+/* you badge */
+[data-theme="light"] .you{background:rgba(0,60,200,.14);color:var(--olive);}
+/* post modal header meta */
+[data-theme="light"] .pm-meta{color:var(--txt2);}
+[data-theme="light"] .pm-type-badge{}
+/* ── LIGHT: TOAST ── */
+[data-theme="light"] .toast{background:rgba(240,242,255,.99);border-color:rgba(0,0,0,.12);color:var(--txt);box-shadow:0 8px 32px rgba(0,0,0,.15);}
+[data-theme="light"] .toast.error{border-color:rgba(180,40,40,.3);color:#c03030;}
+[data-theme="light"] .toast.success{border-color:rgba(0,80,220,.5);color:var(--olive);}
+/* ── LIGHT: SCROLLBAR ── */
+[data-theme="light"] ::-webkit-scrollbar-thumb{background:var(--brd2);}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover{background:var(--blue2);}
+[data-theme="light"] .srch-month-inp{color-scheme:light;}
+[data-theme="light"] .fg input[type="datetime-local"]{color-scheme:light;background:rgba(0,0,0,.04);border-color:var(--brd);color:var(--txt);}
+*{box-sizing:border-box;margin:0;padding:0;}
+svg{vertical-align:middle;display:inline-block;}
+body{font-family:'Hind Siliguri','Inter',sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}
+::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:4px;}::-webkit-scrollbar-thumb:hover{background:var(--blue2);}
+nav{
+  background:linear-gradient(135deg,rgba(0,30,80,.96) 0%,rgba(0,60,180,.92) 50%,rgba(0,30,80,.96) 100%);
+  backdrop-filter:blur(28px) saturate(200%);
+  -webkit-backdrop-filter:blur(28px) saturate(200%);
+  border-bottom:1px solid rgba(0,102,255,.35);
+  height:62px;padding:0 1.25rem;display:flex;align-items:center;gap:.3rem;
+  position:sticky;top:0;z-index:200;overflow:visible;
+  box-shadow:0 1px 40px rgba(0,0,0,.5),0 0 60px rgba(0,102,255,.12);
+  animation:navGlow 6s ease-in-out infinite;
+}
+.nav-logo{display:flex;align-items:center;gap:.4rem;text-decoration:none;margin-right:.3rem;flex-shrink:0;}
+.nav-logo img{height:34px;width:34px;min-width:34px;object-fit:contain;border-radius:8px;box-shadow:0 0 12px rgba(0,102,255,.25);}
+.nav-logo-text{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;line-height:1;min-width:0;}
+.nav-logo-text strong{font-family:'Amiri',serif;font-size:.93rem;background:linear-gradient(100deg,#7dc832 0%,#7dc832 28%,#4db8e8 38%,#4db8e8 65%,#f5a020 78%,#f5a020 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-weight:700;display:block;line-height:1.5;white-space:nowrap;padding-top:2px;}
+.nav-logo-text em{font-style:normal;color:rgba(77,184,232,.5);font-size:.46rem;letter-spacing:2px;font-family:'IBM Plex Mono',monospace;display:block;margin-top:0;line-height:1;white-space:nowrap;text-transform:uppercase;}
+.nav-tab{background:none;border:none;color:rgba(255,255,255,.6);padding:.32rem .7rem;border-radius:8px;cursor:pointer;font-size:.82rem;font-family:inherit;font-weight:500;transition:var(--trans);flex-shrink:0;letter-spacing:.01em;position:relative;}
+.nav-tab:hover{background:rgba(255,255,255,.1);color:rgba(255,255,255,.95);}
+.nav-tab.active{color:#fff;font-weight:600;}
+.nav-tab.active::after{content:'';position:absolute;bottom:-1px;left:50%;transform:translateX(-50%);width:60%;height:2.5px;background:linear-gradient(90deg,transparent,var(--orange2),transparent);border-radius:2px;box-shadow:0 0 8px rgba(255,102,0,.6);}
+.nav-sp{flex:1;}
+@media(max-width:780px){
+  .nav-logo-text strong{font-size:.8rem;}
+  .nav-logo-text em{font-size:.42rem;letter-spacing:1px;}
+}
+@media(max-width:640px){
+  nav{padding:0 .65rem;gap:.15rem;height:54px;}
+  .nav-logo-text{display:none;}
+  .nav-logo img{height:32px;width:32px;}
+  .nav-tab{font-size:.74rem;padding:.28rem .42rem;border-radius:7px;}
+}
+.srch-wrap{display:flex;align-items:center;gap:.4rem;}
+.srch{display:flex;align-items:center;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:.3rem .6rem;gap:.3rem;}
+.srch input{background:none;border:none;outline:none;color:#fff;font-size:.8rem;width:120px;font-family:inherit;}
+.srch input::placeholder{color:rgba(255,255,255,.3);}
+.srch-btn{background:var(--olive);border:none;color:#fff;border-radius:6px;padding:.28rem .6rem;cursor:pointer;font-size:.75rem;font-family:inherit;}
+#loginBtn{
+  background:linear-gradient(135deg,#0055e6,#0080ff);
+  color:#fff;border:none;padding:.34rem .85rem;border-radius:8px;cursor:pointer;
+  font-size:.79rem;font-family:inherit;display:flex;align-items:center;gap:.3rem;flex-shrink:0;
+  font-weight:600;box-shadow:0 2px 16px rgba(0,102,255,.45);transition:var(--trans);
+}
+#loginBtn:hover{background:linear-gradient(135deg,#0066ff,#1a90ff);box-shadow:0 6px 24px rgba(0,102,255,.6);transform:translateY(-2px);}
+#profileArea{display:none;align-items:center;gap:.35rem;flex-shrink:0;}
+.pa-btn{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.11);border-radius:8px;padding:.28rem .5rem;cursor:pointer;color:#fff;font-size:.77rem;font-family:inherit;display:flex;align-items:center;gap:.3rem;transition:var(--trans);}
+.pa-btn:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);}
+.pa-img{width:25px;height:25px;border-radius:50%;object-fit:cover;border:2px solid var(--olive3);box-shadow:0 0 8px rgba(0,102,255,.4);}
+.pa-name{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#newPostBtn{
+  background:linear-gradient(135deg,#ff5500,#ff7700);
+  color:#fff;border:none;padding:.34rem .8rem;border-radius:8px;cursor:pointer;
+  font-size:.77rem;font-weight:600;display:none;align-items:center;gap:.25rem;
+  font-family:inherit;white-space:nowrap;box-shadow:0 2px 16px rgba(255,85,0,.45);transition:var(--trans);
+}
+#newPostBtn:hover{background:linear-gradient(135deg,#ff6a00,#ff8c1a);transform:translateY(-2px);box-shadow:0 6px 24px rgba(255,85,0,.6);}
+
+/* HERO */
+.hero{
+  background:linear-gradient(160deg,#010a20 0%,#012060 35%,#0040c0 65%,#003090 80%,#010a20 100%);
+  padding:3.5rem 2rem 3rem;text-align:center;
+  border-bottom:1px solid rgba(0,102,255,.3);
+  position:relative;overflow:hidden;
+}
+.hero::before{
+  content:'';position:absolute;inset:0;
+  background-image:
+    radial-gradient(ellipse at 15% 60%, rgba(0,102,255,.25) 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 25%, rgba(0,150,255,.2) 0%, transparent 45%),
+    radial-gradient(ellipse at 55% 85%, rgba(255,102,0,.12) 0%, transparent 40%),
+    radial-gradient(rgba(0,102,255,.06) 1px, transparent 1px);
+  background-size:100% 100%,100% 100%,100% 100%,28px 28px;
+  pointer-events:none;
+  animation:heroPulseBlue 5s ease-in-out infinite;
+}
+.hero::after{
+  content:'';position:absolute;bottom:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,rgba(0,150,255,.6),rgba(255,102,0,.4),transparent);
+}
+.hero-logo{
+  display:block;width:92px;height:92px;object-fit:contain;
+  margin:0 auto 1rem;border-radius:20px;position:relative;
+  filter:drop-shadow(0 0 28px rgba(0,102,255,.7)) drop-shadow(0 4px 16px rgba(0,0,0,.5));
+  animation:hero-pulse 4s ease-in-out infinite;
+}
+@keyframes hero-pulse{0%,100%{filter:drop-shadow(0 0 22px rgba(0,102,255,.6)) drop-shadow(0 4px 16px rgba(0,0,0,.5));transform:scale(1);}50%{filter:drop-shadow(0 0 40px rgba(255,102,0,.5)) drop-shadow(0 0 60px rgba(0,102,255,.4));transform:scale(1.03);}}
+.hero-ar{font-family:'Amiri',serif;font-size:1.6rem;color:rgba(180,220,255,.85);direction:rtl;position:relative;margin-bottom:.3rem;letter-spacing:.02em;}
+.hero h1{
+  font-family:'Amiri',serif;font-size:2.2rem;
+  background:linear-gradient(120deg,#60b0ff 0%,#ffffff 45%,var(--orange3) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  margin:.2rem 0 .5rem;position:relative;font-weight:700;letter-spacing:-.01em;
+}
+.hero p{color:rgba(180,210,255,.85);font-size:.85rem;position:relative;max-width:420px;margin:0 auto;line-height:1.75;}
+
+/* NAV SEARCH BUTTON */
+.nav-search-btn{
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+  border-radius:8px;color:rgba(255,255,255,.65);padding:.3rem .75rem;
+  cursor:pointer;font-size:.79rem;font-family:inherit;display:flex;align-items:center;gap:.38rem;transition:var(--trans);
+}
+.nav-search-btn:hover{background:rgba(255,255,255,.11);color:#fff;border-color:rgba(255,255,255,.22);}
+@media(max-width:600px){
+  .nav-search-btn span{display:none;}
+  .nav-search-btn{padding:.3rem .45rem;border-radius:7px;}
+  #loginBtn{padding:.3rem .55rem;font-size:.74rem;}
+  #newPostBtn{padding:.3rem .55rem;font-size:.72rem;}
+  #newPostBtn span.np-label{display:none;}
+  .pa-name{display:none;}
+  .pa-btn{padding:.27rem .4rem;}
+}
+
+/* SEARCH MODAL */
+.srch-modal-box{
+  position:relative;
+  background:rgba(4,12,40,.97);
+  backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);
+  border:1px solid rgba(0,102,255,.18);
+  border-radius:18px;width:100%;max-width:720px;max-height:85vh;
+  display:flex;flex-direction:column;
+  box-shadow:0 24px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.04);
+}
+.srch-hd{display:flex;align-items:center;gap:.65rem;padding:1rem 1.1rem;border-bottom:1px solid rgba(255,255,255,.06);}
+.srch-input-wrap{
+  flex:1;display:flex;align-items:center;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:10px;padding:.48rem .8rem;gap:.5rem;transition:var(--trans);
+}
+.srch-input-wrap:focus-within{border-color:rgba(168,204,90,.45);background:rgba(255,255,255,.08);box-shadow:0 0 0 3px rgba(0,60,200,.14);}
+.srch-input-wrap svg{flex-shrink:0;color:rgba(255,255,255,.3);}
+.srch-input-wrap input{flex:1;background:none;border:none;outline:none;color:#fff;font-size:.95rem;font-family:inherit;}
+.srch-input-wrap input::placeholder{color:rgba(255,255,255,.25);}
+.srch-clr-btn{background:none;border:none;color:rgba(255,255,255,.35);cursor:pointer;font-size:.9rem;padding:0;line-height:1;transition:var(--trans);}
+.srch-clr-btn:hover{color:#fff;}
+.srch-close-btn{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.5);width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:.85rem;transition:var(--trans);}
+.srch-close-btn:hover{color:#fff;background:rgba(255,255,255,.12);}
+.srch-filters{display:flex;flex-wrap:wrap;gap:.75rem 1.2rem;padding:.8rem 1.1rem;border-bottom:1px solid rgba(255,255,255,.05);align-items:center;}
+.srch-filter-group{display:flex;align-items:center;gap:.45rem;}
+.srch-filter-label{font-size:.66rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.7px;flex-shrink:0;font-family:'IBM Plex Mono',monospace;}
+.srch-pills{display:flex;gap:.25rem;}
+.srch-pill{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);
+  color:rgba(255,255,255,.5);padding:.2rem .6rem;border-radius:20px;
+  cursor:pointer;font-size:.74rem;font-family:inherit;transition:var(--trans);
+}
+.srch-pill:hover{color:rgba(255,255,255,.9);border-color:rgba(255,255,255,.25);}
+.srch-pill.active{background:rgba(0,102,255,.2);color:var(--olive3);border-color:rgba(0,80,220,.55);}
+.srch-month-inp{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
+  border-radius:8px;color:var(--txt);font-size:.77rem;font-family:inherit;
+  padding:.24rem .5rem;outline:none;cursor:pointer;color-scheme:dark;transition:var(--trans);
+}
+.srch-month-inp:focus{border-color:rgba(0,80,220,.55);}
+
+/* Custom select dropdowns in search */
+.srch-custom-sel-wrap{position:relative;}
+.srch-custom-sel-btn{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
+  border-radius:8px;color:var(--txt);font-size:.77rem;font-family:inherit;
+  padding:.26rem .52rem .26rem .6rem;outline:none;cursor:pointer;
+  display:flex;align-items:center;gap:.4rem;min-width:80px;
+  transition:var(--trans);white-space:nowrap;
+}
+.srch-custom-sel-btn:hover{border-color:rgba(0,80,220,.5);background:rgba(255,255,255,.08);}
+.srch-sel-arrow{font-size:.62rem;color:var(--txt2);margin-left:auto;transition:var(--trans);}
+.srch-custom-sel-dd{
+  position:absolute;top:calc(100% + 4px);left:0;min-width:150px;
+  background:rgba(4,12,40,.97);border:1px solid rgba(0,102,255,.18);
+  box-shadow:0 10px 32px rgba(0,0,0,.65);backdrop-filter:blur(20px);
+  overflow:hidden;
+}
+.srch-dd-item{
+  display:flex;align-items:center;gap:.4rem;
+  padding:.42rem .75rem;font-size:.78rem;color:var(--txt2);
+  cursor:pointer;transition:var(--trans);
+}
+.srch-dd-item:hover{background:rgba(255,255,255,.07);color:var(--txt);}
+.srch-dd-active{color:var(--olive3);background:rgba(107,140,58,.1);}
+.srch-dd-active:hover{background:rgba(107,140,58,.15);}
+.srch-dd-tag-sel{color:var(--txt);background:rgba(77,168,224,.07);}
+.srch-dd-tag-sel:hover{background:rgba(77,168,224,.13);}
+.srch-dd-chk{font-size:.68rem;flex-shrink:0;}
+.srch-dd-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+/* Multi-tag chips inside the button */
+.srch-tag-chips-wrap{display:flex;flex-wrap:wrap;gap:.22rem;align-items:center;flex:1;min-width:0;}
+.srch-tag-chip{
+  font-size:.68rem;padding:.1rem .38rem;border-radius:20px;
+  border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);
+  color:rgba(255,255,255,.7);white-space:nowrap;
+}
+.srch-status{padding:.55rem 1.1rem;font-size:.74rem;color:var(--txt2);border-bottom:1px solid rgba(255,255,255,.04);}
+.srch-results{flex:1;overflow-y:auto;padding:.5rem .65rem;}
+.srch-empty{text-align:center;padding:2.5rem;color:var(--txt2);}
+.srch-item{display:flex;gap:.8rem;padding:.65rem .55rem;border-radius:10px;cursor:pointer;transition:var(--trans);border-bottom:1px solid rgba(255,255,255,.03);}
+.srch-item:hover{background:rgba(255,255,255,.05);}
+.srch-item:last-child{border-bottom:none;}
+.srch-item-img{width:70px;height:70px;border-radius:9px;background-size:cover;background-position:center;flex-shrink:0;}
+.srch-item-body{flex:1;min-width:0;}
+.srch-item-meta{display:flex;align-items:center;gap:.4rem;margin-bottom:.25rem;flex-wrap:wrap;}
+.srch-item-time{font-size:.67rem;color:var(--txt2);}
+.srch-item-stat{font-size:.67rem;color:var(--txt2);display:inline-flex;align-items:center;gap:.25rem;line-height:1;}
+.srch-item-title{font-family:'Amiri',serif;font-size:1rem;color:var(--txt);font-weight:700;margin-bottom:.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.srch-item-excerpt{font-size:.75rem;color:var(--txt2);line-height:1.5;margin-bottom:.25rem;}
+.srch-item-tags{display:flex;flex-wrap:wrap;gap:.2rem;margin-bottom:.25rem;}
+.srch-item-author{display:flex;align-items:center;gap:.3rem;font-size:.7rem;color:var(--txt2);}
+.srch-item-author img{width:16px;height:16px;border-radius:50%;object-fit:cover;}
+@media(max-width:600px){
+  .srch-modal-box{border-radius:16px 16px 0 0;max-height:92vh;}
+  #searchModal{padding:0;align-items:flex-end !important;padding-top:0 !important;}
+  .srch-filters{gap:.5rem .75rem;padding:.6rem .75rem;}
+  .srch-filter-group{gap:.3rem;}
+  .srch-item-img{width:54px;height:54px;}
+}
+
+/* MAIN */
+main{max-width:1200px;margin:0 auto;padding:1.8rem 1.5rem;}
+.sec-head{margin-bottom:1rem;}
+.sec-title{
+  font-family:'Amiri',serif;font-size:1.3rem;color:#60b0ff;
+  display:flex;align-items:center;gap:.5rem;font-weight:700;
+}
+.sec-title::before{
+  content:'';width:3px;height:1.1em;
+  background:linear-gradient(to bottom,#ff7700,#ff4400);
+  border-radius:2px;flex-shrink:0;
+  box-shadow:0 0 8px rgba(255,102,0,.5);
+}
+@media(max-width:600px){
+  main{padding:1rem .75rem;}
+  .modal{padding:.5rem;}
+  .mb{border-radius:12px;}
+  .pmb,.creatmb{max-width:100%;}
+}
+
+/* GRID */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;align-items:start;}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:560px){.grid{grid-template-columns:1fr;}}
+
+/* CARD */
+.card{
+  background:linear-gradient(160deg,rgba(6,16,50,.92) 0%,rgba(8,22,60,.88) 100%);
+  border:1px solid rgba(0,102,255,.22);
+  border-radius:var(--r2);overflow:hidden;display:flex;flex-direction:column;cursor:pointer;
+  transition:transform .28s cubic-bezier(.4,0,.2,1),box-shadow .28s,border-color .28s;
+  isolation:isolate;transform:translateZ(0);
+  box-shadow:0 4px 20px rgba(0,10,50,.5),inset 0 1px 0 rgba(100,160,255,.06);
+  position:relative;
+  animation:fadeInUp .45s cubic-bezier(.4,0,.2,1) both;
+}
+.card:nth-child(1){animation-delay:.04s}.card:nth-child(2){animation-delay:.09s}.card:nth-child(3){animation-delay:.14s}.card:nth-child(4){animation-delay:.19s}.card:nth-child(5){animation-delay:.24s}.card:nth-child(6){animation-delay:.29s}
+.card::before{
+  content:'';position:absolute;inset:0;border-radius:var(--r2);
+  background:linear-gradient(135deg,rgba(0,102,255,.07) 0%,transparent 55%);
+  pointer-events:none;z-index:0;transition:opacity .28s;
+}
+.card:hover{
+  border-color:rgba(0,130,255,.6);
+  transform:translateY(-6px) scale(1.005);
+  box-shadow:0 20px 50px rgba(0,20,80,.65),0 0 0 1px rgba(0,102,255,.25),0 0 40px rgba(0,102,255,.08);
+}
+.card:hover::before{opacity:2.5;}
+.card-inner{padding:.85rem .9rem .5rem;position:relative;z-index:1;}
+.card-meta-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;}
+.card-author-row{display:flex;align-items:center;gap:.4rem;}
+.card-av{width:22px;height:22px;border-radius:50%;object-fit:cover;border:1.5px solid rgba(0,80,220,.55);}
+.card-author{font-size:.71rem;color:var(--txt2);}
+.card-type-badge{font-size:.61rem;font-weight:700;padding:.14rem .45rem;border-radius:5px;letter-spacing:.4px;text-transform:uppercase;}
+.ct-recent{background:rgba(0,102,255,.18);color:#60b0ff;border:1px solid rgba(0,102,255,.3);}
+.ct-blog{background:rgba(0,130,255,.15);color:#80c4ff;border:1px solid rgba(0,130,255,.25);}
+.ct-guideline{background:rgba(255,102,0,.15);color:var(--orange3);border:1px solid rgba(255,102,0,.25);}
+.card-title{font-family:'Amiri',serif;font-size:1.07rem;color:var(--txt);line-height:1.32;font-weight:700;margin-bottom:.32rem;}
+.card-excerpt{font-size:.77rem;color:var(--txt2);line-height:1.6;margin-bottom:.35rem;}
+.card-tags{display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.35rem;}
+.post-tag{
+  font-size:.67rem;color:rgba(77,168,224,.85);cursor:pointer;
+  background:rgba(0,102,255,.08);
+  padding:.1rem .4rem;border-radius:4px;transition:var(--trans);
+  border:1px solid rgba(77,168,224,.15);
+}
+.post-tag:hover{background:rgba(77,168,224,.2);color:var(--sky3);border-color:rgba(77,168,224,.35);}
+
+/* Image area */
+.card-img-wrap{display:grid;grid-template-columns:2fr 1fr;gap:2px;background:var(--bg);aspect-ratio:4/3;overflow:hidden;border-radius:0;}
+.card-img-wrap.ci-single{grid-template-columns:1fr;aspect-ratio:16/9;}
+.card-img-wrap.ci-equal{grid-template-columns:1fr 1fr;}
+.ci-full{background-size:cover;background-position:center;width:100%;height:100%;}
+.ci-main{background-size:cover;background-position:center;height:100%;}
+.ci-side{display:flex;flex-direction:column;gap:2px;height:100%;}
+.ci-s1{flex:1;background-size:cover;background-position:center;}
+.ci-s1-full{flex:none;height:100%;background-size:cover;background-position:center;}
+.ci-s2{flex:1;background-size:cover;background-position:center;position:relative;overflow:hidden;}
+.ci-blur-overlay{position:absolute;inset:0;backdrop-filter:blur(6px);background:rgba(0,0,0,.3);}
+.ci-overlay{position:absolute;inset:0;backdrop-filter:blur(4px);background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.2rem;font-weight:700;}
+
+.card-footer-row{display:flex;justify-content:space-between;align-items:center;padding:.42rem .9rem .32rem;font-size:.67rem;color:var(--txt2);position:relative;z-index:1;}
+.card-date,.card-readtime{display:inline-flex;align-items:center;gap:.3rem;line-height:1;}
+.card-date svg,.card-readtime svg{flex-shrink:0;}
+
+/* Action bar */
+.cact{display:flex;border-top:1px solid var(--brd);position:relative;z-index:1;}
+.ca{
+  flex:1;background:none;border:none;border-right:1px solid var(--brd);
+  cursor:pointer;color:var(--txt2);font-size:.74rem;font-family:inherit;
+  padding:.52rem .3rem;display:flex;align-items:center;justify-content:center;gap:.3rem;transition:var(--trans);line-height:1;
+}
+.ca svg{flex-shrink:0;}
+.ca:last-child{border-right:none;}
+.ca:hover{background:rgba(255,255,255,.04);color:var(--txt);}
+.ca.cal{color:var(--sky2);}.ca.cas{color:var(--orange2);}.ca-del:hover{background:rgba(184,48,48,.12);color:var(--red);}
+
+.shimmer{background:linear-gradient(100deg,var(--card) 25%,rgba(0,60,180,.15) 50%,var(--card) 75%);background-size:200% 100%;animation:shimmerSlide 1.5s ease-in-out infinite;border-radius:var(--r2);height:300px;}
+.empty{grid-column:1/-1;text-align:center;padding:3rem;color:var(--txt2);}
+
+/* ── FLOATING COMMENT BOX ── */
+#commentBox{
+  display:none;position:fixed;bottom:1.5rem;right:1.5rem;width:340px;max-height:480px;
+  background:linear-gradient(160deg,rgba(4,12,36,.97) 0%,rgba(6,16,48,.96) 100%);
+  backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
+  border:1px solid rgba(0,102,255,.28);
+  border-radius:16px;box-shadow:0 16px 48px rgba(0,10,60,.8),0 0 0 1px rgba(0,102,255,.08);
+  z-index:500;flex-direction:column;overflow:hidden;
+}
+@media(max-width:600px){
+  #commentBox{left:0;right:0;bottom:0;width:100%;border-radius:14px 14px 0 0;max-height:70vh;}
+}
+.cb-header{display:flex;justify-content:space-between;align-items:center;padding:.7rem 1rem;border-bottom:1px solid rgba(255,255,255,.06);font-size:.84rem;font-weight:500;background:rgba(255,255,255,.03);}
+.cb-close-btn{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.65);cursor:pointer;font-size:.85rem;width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;transition:var(--trans);flex-shrink:0;}
+.cb-close-btn:hover{background:rgba(255,255,255,.15);color:#fff;}
+.cmi-top{display:flex;align-items:center;justify-content:space-between;gap:.3rem;}
+.cmi-acts{display:flex;gap:.15rem;align-items:center;flex-shrink:0;}
+.cm-act{background:none;border:none;cursor:pointer;font-size:.72rem;padding:.15rem .28rem;border-radius:5px;opacity:.5;transition:var(--trans);line-height:1;display:inline-flex;align-items:center;justify-content:center;}
+.cmi:hover .cm-act{opacity:.7;}
+.cm-act:hover{opacity:1 !important;background:rgba(255,255,255,.08);}
+.cm-pin.cm-pinned{opacity:.9 !important;}
+.cm-del:hover{background:rgba(184,48,48,.2) !important;color:#e74c3c;}
+.cm-rep:hover{background:rgba(224,120,32,.15) !important;color:var(--orange);}
+.cm-pin-badge{font-size:.7rem;margin-right:.2rem;vertical-align:middle;}
+.cmi-pinned{background:rgba(107,140,58,.08);border:1px solid rgba(0,60,200,.14);}
+.cmt-blocked{color:var(--red,#e74c3c)!important;}
+.cb-list{flex:1;overflow-y:auto;padding:.7rem;min-height:80px;max-height:320px;}
+.cb-form{display:flex;gap:.4rem;align-items:center;padding:.6rem;border-top:1px solid rgba(255,255,255,.06);}
+.cb-form img{width:26px;height:26px;border-radius:50%;object-fit:cover;flex-shrink:0;}
+.cb-form input{flex:1;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:.38rem .75rem;color:#fff;font-size:.8rem;font-family:inherit;outline:none;transition:var(--trans);}
+.cb-form input:focus{border-color:rgba(0,80,220,.55);}
+.cb-form button{background:var(--blue2);color:#fff;border:none;padding:.38rem .75rem;border-radius:20px;cursor:pointer;font-size:.85rem;transition:var(--trans);}
+.cb-form button:hover{background:var(--blue3);}
+
+/* ── MODALS ── */
+.modal{display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;padding:1rem;}
+.mo{position:absolute;inset:0;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+.mb{
+  position:relative;
+  background:linear-gradient(160deg,rgba(4,14,40,.98) 0%,rgba(6,18,50,.97) 100%);
+  border:1px solid rgba(0,102,255,.2);
+  border-radius:var(--r2);width:100%;max-height:90vh;overflow-y:auto;
+  box-shadow:0 24px 80px rgba(0,10,60,.9),0 0 0 1px rgba(0,102,255,.06);
+}
+.mcl{
+  position:sticky;top:.55rem;float:right;margin:.55rem .55rem 0 0;
+  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);
+  border-radius:8px;color:rgba(255,255,255,.45);width:28px;height:28px;
+  cursor:pointer;font-size:.85rem;transition:var(--trans);
+}
+.mcl:hover{color:#fff;background:rgba(255,255,255,.14);}
+
+/* Post modal */
+.pmb{max-width:640px;}
+.pm-img-single{height:290px;background-size:cover;background-position:center;cursor:pointer;position:relative;overflow:hidden;border-radius:12px;margin-top:.9rem;transition:filter .2s;}
+.pm-img-single:hover{filter:brightness(1.08);}
+.pm-img-hover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);opacity:0;transition:opacity .2s;pointer-events:none;}
+.pm-img-single:hover .pm-img-hover{opacity:1;}
+.pm-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:4px;border-radius:12px;overflow:hidden;margin-top:.9rem;}
+.pm-gimg{height:148px;background-size:cover;background-position:center;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.pm-gimg:hover{filter:brightness(1.1);}
+.pm-gimg-hover{position:absolute;inset:0;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s;pointer-events:none;}
+.pm-gimg:hover .pm-gimg-hover{opacity:1;}
+.pm-bd{padding:1.3rem;}
+.pm-meta{display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem;font-size:.76rem;color:var(--txt2);}
+.pm-title{font-family:'Amiri',serif;font-size:1.65rem;color:var(--txt);margin-bottom:.5rem;line-height:1.3;}
+.pm-auth{display:flex;align-items:center;gap:.4rem;font-size:.77rem;color:var(--txt2);margin-bottom:.85rem;}
+.pm-auth img{width:24px;height:24px;border-radius:50%;object-fit:cover;}
+.pm-rb{background:rgba(0,60,200,.14);color:var(--olive3);font-size:.61rem;padding:.08rem .42rem;border-radius:5px;margin-left:.2rem;}
+.pm-txt{color:var(--txt);line-height:1.85;font-size:.88rem;white-space:pre-wrap;}
+.pm-acts{display:flex;gap:.5rem;margin:.85rem 0 .6rem;flex-wrap:wrap;}
+.pill{
+  background:rgba(0,102,255,.08);border:1px solid rgba(0,102,255,.2);
+  color:rgba(100,160,255,.8);padding:.34rem .9rem;border-radius:20px;cursor:pointer;
+  font-size:.77rem;font-family:inherit;transition:var(--trans);display:inline-flex;align-items:center;gap:.35rem;
+}
+.pill:hover,.pill.pla,.pill.psa{background:rgba(0,102,255,.2);color:var(--olive3);border-color:rgba(0,80,220,.5);}
+.pill-del{color:rgba(220,80,80,.8) !important;border-color:rgba(220,80,80,.2) !important;}
+.pill-del:hover{background:rgba(184,48,48,.15) !important;color:#e05c5c !important;border-color:rgba(184,48,48,.4) !important;}
+[data-theme="light"] .pill-del{color:#c03030 !important;border-color:rgba(180,40,40,.2) !important;}
+[data-theme="light"] .pill-del:hover{background:rgba(180,40,40,.1) !important;color:#b83030 !important;border-color:rgba(180,40,40,.35) !important;}
+[data-theme="light"] .pill{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.14);color:var(--txt2);}
+[data-theme="light"] .pill:hover,[data-theme="light"] .pill.pla,[data-theme="light"] .pill.psa{background:rgba(0,102,255,.12);color:var(--olive);border-color:rgba(0,80,220,.5);}
+.cmw{border-top:1px solid var(--brd);padding-top:.85rem;margin-top:.85rem;}
+.cmw h4{font-size:.72rem;color:var(--txt2);text-transform:uppercase;letter-spacing:1px;margin-bottom:.55rem;font-family:'IBM Plex Mono',monospace;}
+.cmi{display:flex;gap:.5rem;margin-bottom:.48rem;padding:.44rem .52rem;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid transparent;}
+[data-theme="light"] .cmi{background:rgba(0,0,0,.03);}
+.pm-acts{display:flex;gap:.5rem;margin:.85rem 0 .6rem;flex-wrap:wrap;}
+.cmi img{width:22px;height:22px;border-radius:50%;object-fit:cover;flex-shrink:0;}
+.reply-btn{background:none;border:none;color:var(--sky2);font-size:.7rem;cursor:pointer;padding:.1rem .3rem;border-radius:4px;opacity:.6;transition:var(--trans);}
+.reply-btn:hover{opacity:1;background:rgba(58,143,196,.15);}
+.reply-ref{display:inline-flex;align-items:center;gap:.25rem;font-size:.68rem;color:var(--sky2);margin:.15rem 0 .25rem;background:rgba(58,143,196,.1);padding:.1rem .45rem;border-radius:4px;border-left:2px solid var(--sky2);}
+.reply-chip{display:flex;align-items:center;gap:.4rem;background:rgba(58,143,196,.12);border:1px solid rgba(58,143,196,.25);border-radius:8px;padding:.28rem .6rem;margin-bottom:.35rem;font-size:.75rem;color:var(--sky2);}
+.reply-chip button{background:none;border:none;color:var(--sky2);cursor:pointer;font-size:.8rem;margin-left:auto;opacity:.7;}
+.reply-chip button:hover{opacity:1;}
+.cmi strong{font-size:.77rem;color:var(--txt);}
+.cmt{font-size:.65rem;color:var(--txt2);margin-left:.3rem;}
+.cmi p{font-size:.77rem;color:var(--txt2);margin-top:.1rem;}
+.cmf{display:flex;gap:.38rem;align-items:center;margin-top:.6rem;}
+.cmf img{width:24px;height:24px;border-radius:50%;flex-shrink:0;}
+.cmf input{flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:.4rem .65rem;color:var(--txt);font-size:.78rem;font-family:inherit;outline:none;transition:var(--trans);}
+[data-theme="light"] .cmf input{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.12);}
+.cmf input:focus{border-color:rgba(0,80,220,.55);}
+.cmf button{background:var(--blue2);color:#fff;border:none;padding:.4rem .75rem;border-radius:8px;cursor:pointer;font-size:.78rem;font-family:inherit;transition:var(--trans);}
+.cmf button:hover{background:var(--blue3);}
+.cmt-h{color:var(--txt2);font-size:.78rem;text-align:center;padding:.4rem 0;}
+
+/* Create modal */
+.creatmb{max-width:540px;padding:1.4rem;}
+.creatmb h2{font-family:'Amiri',serif;font-size:1.3rem;background:linear-gradient(100deg,var(--blue3),var(--sky3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem;}
+.fg{margin-bottom:.8rem;position:relative;}
+.fg label{display:block;font-size:.68rem;color:var(--txt2);margin-bottom:.28rem;text-transform:uppercase;letter-spacing:.5px;font-family:'IBM Plex Mono',monospace;}
+.fg input[type="datetime-local"]{color-scheme:dark;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:.5rem .68rem;color:var(--txt);font-size:.85rem;font-family:inherit;outline:none;transition:var(--trans);}
+.fg input[type="datetime-local"]:focus{border-color:rgba(0,80,220,.55);box-shadow:0 0 0 3px rgba(0,102,255,.08);}
+.fg input,.fg select,.fg textarea{width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:.5rem .68rem;color:var(--txt);font-size:.85rem;font-family:inherit;outline:none;transition:var(--trans);}
+[data-theme="light"] .fg input,[data-theme="light"] .fg select,[data-theme="light"] .fg textarea{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.12);}
+[data-theme="light"] .fg input[type="datetime-local"]{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.12);}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:rgba(0,80,220,.55);box-shadow:0 0 0 3px rgba(0,102,255,.08);}
+.fg textarea{resize:vertical;min-height:100px;line-height:1.65;}
+.fg select option{background:#0a1810;}
+.tag-hint{font-size:.67rem;color:var(--txt2);margin-top:.2rem;}
+.tag-suggest-box{position:absolute;background:rgba(4,12,40,.97);border:1px solid rgba(0,102,255,.18);border-radius:9px;z-index:10;width:100%;max-height:140px;overflow-y:auto;backdrop-filter:blur(16px);}
+.tag-sug{padding:.4rem .7rem;font-size:.8rem;color:var(--sky2);cursor:pointer;transition:var(--trans);}
+.tag-sug:hover{background:rgba(255,255,255,.06);}
+
+/* Tag Picker */
+.tag-picker-wrap{position:relative;}
+.tag-chips-row{display:flex;flex-wrap:wrap;gap:.3rem;min-height:0;margin-bottom:.3rem;}
+.tag-chip{display:inline-flex;align-items:center;gap:.25rem;background:rgba(77,168,224,.15);border:1px solid rgba(77,168,224,.3);color:var(--sky2);font-size:.74rem;padding:.15rem .45rem .15rem .55rem;border-radius:20px;}
+.tag-chip button{background:none;border:none;color:var(--sky2);cursor:pointer;font-size:.85rem;line-height:1;padding:0;opacity:.65;}
+.tag-chip button:hover{opacity:1;}
+.tag-picker-input-row{display:flex;gap:.3rem;}
+.tag-picker-input-row input{flex:1;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:.5rem .68rem;color:var(--txt);font-size:.85rem;font-family:inherit;outline:none;transition:var(--trans);}
+.tag-picker-input-row input:focus{border-color:rgba(0,80,220,.55);}
+.tag-dropdown-btn{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:9px;color:var(--txt2);padding:.5rem .72rem;cursor:pointer;font-size:.8rem;transition:var(--trans);}
+.tag-dropdown-btn:hover{border-color:rgba(0,80,220,.55);color:var(--olive3);}
+.tag-dropdown-box{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:rgba(4,12,40,.97);border:1px solid rgba(0,102,255,.18);border-radius:10px;z-index:50;max-height:220px;overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.5);backdrop-filter:blur(20px);}
+.tag-dd-item{display:flex;align-items:center;gap:.4rem;padding:.42rem .72rem;font-size:.8rem;color:var(--txt2);cursor:pointer;transition:var(--trans);}
+.tag-dd-item:hover{background:rgba(255,255,255,.06);color:var(--txt);}
+.tag-dd-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;opacity:.8;}
+.tag-dd-label{flex:1;min-width:0;}
+.tag-dd-actions{display:flex;align-items:center;gap:.18rem;flex-shrink:0;margin-left:auto;}
+.tag-dd-sel{background:rgba(58,143,196,.06);}
+.tag-dd-sel:hover{background:rgba(58,143,196,.12);}
+.tag-dd-check{font-size:.7rem;opacity:.9;}
+.tag-dd-new{padding:.44rem .8rem;font-size:.78rem;color:var(--olive3);cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);transition:var(--trans);}
+.tag-dd-new:hover{background:rgba(107,140,58,.08);}
+.tag-dd-empty{padding:.65rem .8rem;font-size:.78rem;color:var(--txt2);text-align:center;}
+
+/* Tag action buttons — admin/maintainer only */
+.tag-color-btn,.tag-del-btn{
+  background:none;border:none;cursor:pointer;
+  font-size:.68rem;padding:.1rem .2rem;border-radius:4px;
+  opacity:0;transition:var(--trans);line-height:1;
+}
+.tag-dd-item:hover .tag-color-btn,
+.tag-dd-item:hover .tag-del-btn{opacity:.55;}
+.tag-color-btn:hover{opacity:1 !important;background:rgba(77,168,224,.18);}
+.tag-del-btn:hover{opacity:1 !important;background:rgba(184,48,48,.2);color:#e05c5c;}
+
+/* Inline color picker */
+.tc-create-box{padding:.8rem .85rem;}
+.tc-create-tag-preview{
+  display:inline-block;font-size:.82rem;font-weight:600;
+  border:1px solid rgba(255,255,255,.15);border-radius:20px;
+  padding:.22rem .78rem;margin:.3rem 0 .55rem;
+  transition:var(--trans);color:var(--txt2);background:rgba(255,255,255,.06);
+}
+.tc-create-label{font-size:.65rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.7px;font-family:'IBM Plex Mono',monospace;}
+.tc-swatches{display:flex;flex-wrap:wrap;gap:.35rem;margin:.48rem 0 .72rem;}
+.tc-swatch{
+  width:24px;height:24px;border-radius:50%;border:2px solid transparent;
+  cursor:pointer;transition:var(--trans);outline:none;flex-shrink:0;
+}
+.tc-swatch:hover{transform:scale(1.2);box-shadow:0 2px 8px rgba(0,0,0,.5);}
+.tc-swatch-active{border-color:#fff !important;transform:scale(1.2) !important;box-shadow:0 2px 10px rgba(0,0,0,.55);}
+.tc-no-color{
+  background:rgba(255,255,255,.08) !important;
+  border:1px dashed rgba(255,255,255,.3) !important;
+  color:rgba(255,255,255,.45);font-size:.6rem;
+  display:flex;align-items:center;justify-content:center;
+}
+.tc-no-color.tc-swatch-active{border-color:#fff !important;border-style:solid !important;}
+.tc-create-btns{display:flex;gap:.4rem;}
+.tc-cancel-btn{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);
+  color:var(--txt2);padding:.32rem .7rem;border-radius:7px;cursor:pointer;
+  font-size:.76rem;font-family:inherit;transition:var(--trans);
+}
+.tc-cancel-btn:hover{background:rgba(255,255,255,.1);color:var(--txt);}
+.tc-confirm-btn{
+  background:linear-gradient(135deg,var(--blue2),var(--blue));
+  border:none;color:#fff;padding:.32rem .85rem;border-radius:7px;cursor:pointer;
+  font-size:.76rem;font-family:inherit;font-weight:600;flex:1;transition:var(--trans);
+  box-shadow:0 2px 8px rgba(107,140,58,.25);
+}
+.tc-confirm-btn:hover{background:linear-gradient(135deg,var(--olive3),var(--olive2));transform:translateY(-1px);}
+
+/* Image upload */
+.img-drop{border:2px dashed rgba(255,255,255,.1);border-radius:9px;padding:1rem;text-align:center;color:var(--txt2);font-size:.78rem;cursor:pointer;position:relative;transition:var(--trans);}
+.img-drop:hover{border-color:rgba(0,80,220,.55);color:var(--olive3);}
+.img-drop input{position:absolute;inset:0;opacity:0;cursor:pointer;}
+#imgPrev{display:flex;gap:6px;flex-wrap:wrap;margin-top:.4rem;}
+.sbrow{display:flex;gap:.5rem;margin-top:.95rem;}
+#submitBtn{background:linear-gradient(135deg,var(--orange2),var(--orange));color:#fff;border:none;padding:.52rem 1.15rem;border-radius:9px;cursor:pointer;font-weight:600;font-size:.84rem;font-family:inherit;flex:1;box-shadow:0 2px 12px rgba(255,102,0,.35);transition:var(--trans);}
+#submitBtn:hover{background:linear-gradient(135deg,var(--orange3),var(--orange2));transform:translateY(-1px);}
+#submitBtn:disabled{opacity:.45;cursor:not-allowed;transform:none;}
+.canbtn{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:var(--txt2);padding:.52rem .85rem;border-radius:9px;cursor:pointer;font-family:inherit;transition:var(--trans);}
+.canbtn:hover{background:rgba(255,255,255,.09);color:var(--txt);}
+
+/* Profile modal */
+.profmb{max-width:650px;padding:1.4rem;}
+.ph{display:flex;gap:.85rem;align-items:center;margin-bottom:1rem;padding-bottom:.9rem;border-bottom:1px solid rgba(255,255,255,.06);}
+.pav{width:54px;height:54px;border-radius:50%;border:2px solid var(--olive3);object-fit:cover;box-shadow:0 0 12px rgba(0,102,255,.25);}
+.ph h2{font-size:1rem;color:var(--txt);}
+.ph p{font-size:.75rem;color:var(--txt2);margin:.12rem 0 .35rem;}
+.role-badge{font-size:.65rem;padding:.14rem .5rem;border-radius:20px;font-weight:600;}
+/* ── MY POSTS TAB ── */
+.mp-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:16px;height:16px;padding:0 4px;
+  background:var(--blue3);color:#fff;
+  border-radius:8px;font-size:.6rem;font-weight:700;margin-left:.3rem;
+  line-height:1;
+}
+.mp-badge:empty{display:none;}
+.mpr{
+  display:flex;flex-direction:column;gap:.28rem;
+  padding:.6rem .7rem;border-radius:9px;cursor:pointer;
+  border:1px solid var(--brd);background:var(--card2);
+  margin-bottom:.4rem;transition:var(--trans);
+}
+.mpr:hover{border-color:rgba(0,80,220,.5);background:var(--card);transform:translateX(2px);}
+.mpr-main{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;}
+.mpr-title{font-size:.82rem;color:var(--txt);font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mpr-type{font-size:.58rem;padding:.08rem .4rem;border-radius:4px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;flex-shrink:0;}
+.mpr-type.blog{background:rgba(0,60,200,.14);color:var(--sky2);}
+.mpr-type.recent{background:rgba(0,60,200,.14);color:var(--olive3);}
+.mpr-type.guideline{background:rgba(200,90,10,.15);color:var(--orange2);}
+.mpr-meta{display:flex;align-items:center;gap:.6rem;font-size:.65rem;color:var(--txt3);flex-wrap:wrap;}
+.mpr-meta span{display:inline-flex;align-items:center;gap:.22rem;}
+.mpr-tags{display:flex;gap:.25rem;margin-left:auto;}
+.mpr-tag{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:.05rem .32rem;font-size:.6rem;color:var(--txt3);}
+[data-theme="light"] .mpr-tag{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.1);}
+#mpSrch{
+  width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);
+  border-radius:8px;padding:.35rem .65rem;color:var(--txt);font-size:.78rem;
+  font-family:inherit;outline:none;margin-bottom:.6rem;transition:var(--trans);
+}
+#mpSrch:focus{border-color:rgba(0,80,220,.55);box-shadow:0 0 0 2px rgba(0,102,255,.08);}
+[data-theme="light"] #mpSrch{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.12);}
+
+.ptabs{display:flex;gap:.2rem;margin-bottom:.9rem;border-bottom:1px solid rgba(255,255,255,.05);padding-bottom:.38rem;}
+.ptab{background:none;border:none;color:rgba(255,255,255,.45);padding:.3rem .68rem;border-radius:8px;cursor:pointer;font-size:.77rem;font-family:inherit;transition:var(--trans);display:inline-flex;align-items:center;gap:.35rem;line-height:1;}
+.ptab:hover{background:rgba(255,255,255,.06);}
+.ptab.active{background:rgba(0,60,200,.14);color:var(--olive3);}
+.tc{display:none;}.tc.active{display:block;}
+.tab-lbl{font-size:.68rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:.55rem;font-family:'IBM Plex Mono',monospace;}
+.spr{display:flex;justify-content:space-between;padding:.44rem .58rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.05);border-radius:8px;margin-bottom:.28rem;cursor:pointer;font-size:.77rem;color:var(--txt);transition:var(--trans);}
+.spr:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.1);}
+.spd{color:var(--txt2);font-size:.67rem;flex-shrink:0;margin-left:.35rem;}
+.mbh{display:flex;gap:.55rem;align-items:center;margin-bottom:.55rem;}
+.mbh input{flex:1;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:8px;padding:.36rem .58rem;color:var(--txt);font-size:.76rem;outline:none;font-family:inherit;transition:var(--trans);}
+.mbh input:focus{border-color:rgba(0,80,220,.55);}
+.rfrow{display:flex;gap:.25rem;margin-bottom:.55rem;flex-wrap:wrap;}
+.rf{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.45);padding:.2rem .58rem;border-radius:20px;cursor:pointer;font-size:.7rem;font-family:inherit;transition:var(--trans);}
+.rf.active{background:rgba(0,102,255,.2);color:var(--olive3);border-color:rgba(0,102,255,.4);}
+.mstats{display:flex;gap:.28rem;margin-bottom:.55rem;flex-wrap:wrap;}
+.msc{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);border-radius:7px;padding:.2rem .52rem;font-size:.7rem;color:var(--txt2);}
+.msc strong{color:var(--txt);margin-left:.15rem;}
+.mrow{display:flex;align-items:center;gap:.5rem;padding:.44rem .4rem;border-radius:9px;margin-bottom:.25rem;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.03);flex-wrap:wrap;transition:var(--trans);}
+.mrow:hover{background:rgba(255,255,255,.05);}
+.mav{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0;}
+.minf{flex:1;min-width:0;}
+.minf strong{display:block;font-size:.79rem;color:var(--txt);}
+.minf small{font-size:.67rem;color:var(--txt2);}
+.you{background:rgba(0,60,200,.14);color:var(--olive3);font-size:.57rem;padding:.06rem .3rem;border-radius:3px;margin-left:.2rem;}
+.rbtns{display:flex;gap:.2rem;flex-wrap:wrap;}
+.rb{background:none;border:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.35);padding:.15rem .45rem;border-radius:5px;cursor:pointer;font-size:.65rem;font-family:inherit;transition:var(--trans);}
+.rb.maintainer.rba,.rb.maintainer:hover{background:rgba(0,102,255,.18);color:var(--olive3);border-color:rgba(0,80,220,.5);}
+.rb.admin.rba,.rb.admin:hover{background:rgba(224,92,92,.12);color:#e05c5c;border-color:rgba(224,92,92,.35);}
+.rb.worker.rba,.rb.worker:hover{background:rgba(0,102,255,.12);color:var(--blue2);border-color:rgba(77,168,224,.35);}
+.rb.user.rba,.rb.user:hover{background:rgba(136,136,136,.12);color:#aaa;border-color:rgba(136,136,136,.35);}
+.sirows{margin-bottom:.85rem;}
+.sir{display:flex;padding:.48rem 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:.79rem;}
+.sir label{color:var(--txt2);width:115px;flex-shrink:0;}
+.sir span{color:var(--txt);}
+.danger-btn{background:rgba(184,48,48,.1);color:#e05c5c;border:1px solid rgba(184,48,48,.3);padding:.42rem .98rem;border-radius:8px;cursor:pointer;font-size:.79rem;font-family:inherit;transition:var(--trans);}
+.danger-btn:hover{background:var(--red);color:#fff;border-color:var(--red);}
+
+/* ABOUT US & FOOTER */
+.about-section{
+  background:linear-gradient(160deg,#010a22 0%,#021540 50%,#010a22 100%);
+  border-top:1px solid rgba(0,102,255,.25);
+  padding:3.5rem 2rem;text-align:center;position:relative;overflow:hidden;
+}
+.about-section::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 50%,rgba(0,102,255,.12) 0%,transparent 65%);pointer-events:none;}
+.about-section h3{font-family:'Amiri',serif;font-size:1.55rem;background:linear-gradient(90deg,#60b0ff,#ffffff,#ff8c33);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:.8rem;}
+.about-section p{color:rgba(180,210,255,.8);font-size:.84rem;max-width:520px;margin:0 auto .5rem;line-height:1.8;}
+.about-btns{display:flex;justify-content:center;gap:.8rem;margin-top:1.4rem;flex-wrap:wrap;}
+.about-btn-primary{
+  display:inline-flex;align-items:center;gap:.4rem;
+  background:linear-gradient(135deg,#ff5500,#ff7700);
+  color:#fff;border:none;padding:.58rem 1.5rem;border-radius:9px;cursor:pointer;
+  font-size:.87rem;font-family:inherit;font-weight:600;text-decoration:none;
+  box-shadow:0 4px 16px rgba(255,85,0,.4);transition:var(--trans);
+}
+.about-btn-primary svg{flex-shrink:0;}
+.about-btn-primary:hover{background:linear-gradient(135deg,#ff6a00,#ff8c1a);transform:translateY(-2px);box-shadow:0 8px 24px rgba(255,85,0,.55);}
+.about-btn-sec{
+  display:inline-flex;align-items:center;gap:.4rem;
+  background:rgba(0,102,255,.1);color:#60b0ff;
+  border:1px solid rgba(0,102,255,.3);padding:.58rem 1.3rem;border-radius:9px;
+  cursor:pointer;font-size:.87rem;font-family:inherit;text-decoration:none;transition:var(--trans);
+}
+.about-btn-sec svg{flex-shrink:0;}
+.about-btn-sec:hover{background:rgba(0,102,255,.2);border-color:rgba(0,102,255,.5);color:#fff;}
+footer{
+  background:#010820;
+  border-top:1px solid rgba(0,102,255,.15);
+  padding:1.4rem;text-align:center;
+}
+footer p{color:rgba(100,150,220,.55);font-size:.73rem;letter-spacing:.02em;}
+
+.rp-section-lbl{font-size:.67rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.7px;padding:.3rem .2rem .4rem;margin-top:.3rem;font-family:'IBM Plex Mono',monospace;}
+.rp-section-resolved{color:var(--olive2);margin-top:.8rem;}
+.rp-resolved{opacity:.55;border-color:rgba(107,140,58,.15);}
+.rp-resolved .rp-text{background:rgba(0,0,0,.18);}
+.rp-resolved-badge{background:rgba(0,60,200,.14);color:var(--olive3);font-size:.6rem;padding:.08rem .38rem;border-radius:4px;font-weight:600;margin-left:.3rem;}
+/* TOAST */
+.toast{
+  position:fixed;bottom:1.4rem;left:50%;transform:translateX(-50%) translateY(70px);
+  background:rgba(14,26,16,.95);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:.5rem 1.1rem;
+  font-size:.79rem;color:var(--txt);box-shadow:0 8px 32px rgba(0,0,0,.7);
+  z-index:9999;transition:transform .28s cubic-bezier(.4,0,.2,1);white-space:nowrap;
+}
+.toast.show{transform:translateX(-50%) translateY(0);}
+.toast.error{border-color:rgba(224,92,92,.4);color:#e05c5c;}
+.toast.success{border-color:rgba(0,80,220,.5);color:var(--olive3);}
+
+/* REPORTS PANEL */
+.rp-row{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:.68rem .75rem;margin-bottom:.5rem;transition:var(--trans);}
+.rp-comment{display:flex;gap:.58rem;margin-bottom:.55rem;}
+.rp-av{width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid rgba(255,255,255,.08);}
+.rp-body{flex:1;min-width:0;}
+.rp-author{font-size:.77rem;font-weight:600;color:var(--txt);margin-bottom:.18rem;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;}
+.rp-blocked-badge{background:rgba(184,48,48,.18);color:#e05c5c;font-size:.6rem;padding:.08rem .35rem;border-radius:4px;font-weight:600;}
+.rp-text{font-size:.79rem;color:var(--txt2);line-height:1.55;background:rgba(0,0,0,.25);border-radius:7px;padding:.38rem .52rem;margin-bottom:.25rem;word-break:break-word;}
+.rp-meta{font-size:.65rem;color:var(--txt2);}
+.rp-actions{display:flex;gap:.3rem;flex-wrap:wrap;}
+.rp-btn{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);color:var(--txt2);padding:.25rem .6rem;border-radius:7px;cursor:pointer;font-size:.72rem;font-family:inherit;transition:var(--trans);display:inline-flex;align-items:center;justify-content:center;gap:.3rem;line-height:1;}
+.rp-btn:hover{color:#fff;border-color:rgba(255,255,255,.25);}
+.rp-del:hover{background:rgba(184,48,48,.18);color:#e05c5c;border-color:rgba(184,48,48,.35);}
+.rp-block:hover{background:rgba(184,48,48,.14);color:#e05c5c;border-color:rgba(184,48,48,.35);}
+.rp-unblock:hover{background:rgba(107,140,58,.14);color:var(--olive3);border-color:rgba(107,140,58,.35);}
+.rp-dismiss:hover{background:rgba(107,140,58,.1);color:var(--olive3);}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">
+    <img src="https://i.ibb.co.com/wFHMC4Km/logo.jpg" alt="উদ্দীপ্ত তরুণ সংঘ" onerror="this.style.display='none'"/>
+    <div class="nav-logo-text">
+      <strong>উদ্দীপ্ত তরুণ সংঘ</strong>
+      <em>DAWAH COMMUNITY</em>
+    </div>
+  </a>
+  <button class="nav-tab active" data-page="recent" onclick="loadPosts('recent')">সাম্প্রতিক</button>
+  <button class="nav-tab" data-page="blog" onclick="loadPosts('blog')">কার্যক্রম</button>
+  <button class="nav-tab" data-page="guideline" onclick="loadPosts('guideline')">নির্দেশিকা</button>
+  <div class="nav-sp"></div>
+  <button class="nav-search-btn" onclick="openSearch()" title="খুঁজুন">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <span>খুঁজুন</span>
+  </button>
+  <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="থিম পরিবর্তন করুন"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+  <button id="loginBtn" onclick="loginWithGoogle()">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    Login
+  </button>
+  <div id="profileArea">
+    <button id="newPostBtn" onclick="openCreatePost()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <span class="np-label">নতুন পোস্ট</span>
+    </button>
+    <button class="pa-btn" onclick="openProfile()">
+      <img class="pa-img" src="" alt=""/>
+      <span class="pa-name"></span>
+    </button>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <img src="https://i.ibb.co.com/wFHMC4Km/logo.jpg" alt="Logo" class="hero-logo" onerror="this.style.display='none'"/>
+  <div class="hero-ar">ادعُ إِلىٰ سَبيلِ رَبِّكَ بِالحِكمَةِ</div>
+  <h1>উদ্দীপ্ত তরুণ সংঘ</h1>
+  <p>Invite to the way of your Lord with wisdom — knowledge, guidance &amp; brotherhood</p>
+</div>
+
+<!-- filter bar moved to search modal -->
+
+<!-- MAIN -->
+<main>
+  <div class="sec-head">
+    <h2 class="sec-title" id="sectionTitle">সাম্প্রতিক · This Month</h2>
+  </div>
+  <div class="grid" id="postsGrid"></div>
+</main>
+
+<!-- ABOUT & FOOTER -->
+<div class="about-section">
+  <h3>আমাদের সম্পর্কে · About Us</h3>
+  <p>উদ্দীপ্ত তরুণ সংঘ একটি দাওয়াহ কমিউনিটি প্ল্যাটফর্ম — যেখানে ইসলামিক জ্ঞান, নির্দেশিকা এবং ভ্রাতৃত্বের চর্চা হয়।</p>
+  <p>This platform exists to spread beneficial knowledge and build a community around Islamic guidance and dawah activities.</p>
+  <div class="about-btns">
+    <a href="#" class="about-btn-primary" onclick="document.getElementById('donateModal').style.display='flex'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> অবদান রাখুন · Contribute</a>
+    <a href="mailto:contact@uddipto.org" class="about-btn-sec"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> যোগাযোগ করুন</a>
+  </div>
+</div>
+<footer><p>© ২০২৬ উদ্দীপ্ত তরুণ সংঘ · সকল অধিকার সংরক্ষিত</p></footer>
+
+<!-- FLOATING COMMENT BOX -->
+<div id="commentBox"></div>
+
+<!-- POST VIEW MODAL -->
+<div class="modal" id="postModal"></div>
+
+<!-- CREATE POST MODAL -->
+<div class="modal" id="createModal">
+  <div class="mo" onclick="closeModal('createModal')"></div>
+  <div class="mb creatmb">
+    <button class="mcl" onclick="closeModal('createModal')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <h2>নতুন পোস্ট · New Post</h2>
+    <div class="fg">
+      <label>Post Type</label>
+      <select id="ptype">
+        <option value="blog">কার্যক্রম · Activities</option>
+        <option value="guideline">নির্দেশিকা · Guideline</option>
+      </select>
+    </div>
+    <div class="fg"><label>শিরোনাম · Title</label><input id="ptitle" placeholder="পোস্টের শিরোনাম…"/></div>
+    <div class="fg"><label>বিষয়বস্তু · Content (optional)</label><textarea id="pbody" placeholder="লিখুন…"></textarea></div>
+    <div class="fg">
+      <label>ট্যাগ · Tags <span style="color:var(--txt2);font-weight:400;text-transform:none;">(max 5)</span></label>
+      <div class="tag-picker-wrap">
+        <div id="tagChips" class="tag-chips-row"></div>
+        <div class="tag-picker-input-row">
+          <input id="tagSearchInp" placeholder="ট্যাগ খুঁজুন বা নতুন লিখুন…" oninput="tagPickerSearch(this.value)" onfocus="tagPickerOpen()" autocomplete="off"/>
+          <button class="tag-dropdown-btn" onclick="tagPickerToggle(event)" title="সব ট্যাগ দেখুন"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+        </div>
+        <div id="tagDropdown" class="tag-dropdown-box" style="display:none;"></div>
+      </div>
+      <div class="tag-hint">ট্যাগ সার্চ করুন বা ক্লিক করে যোগ করুন · max 5</div>
+    </div>
+    <div class="fg">
+      <label>তারিখ · Post Date <span style="color:var(--txt2);font-weight:400;text-transform:none;">(না দিলে এখনকার সময়)</span></label>
+      <input type="datetime-local" id="pdate" style="width:100%;"/>
+      <div class="tag-hint">পুরনো তারিখে পোস্ট করতে চাইলে এখানে সেট করুন</div>
+    </div>
+    <div class="fg">
+      <label>ছবি · Images <span style="color:var(--txt2);font-weight:400;text-transform:none;">(optional, max 10)</span></label>
+      <div class="img-drop"><input type="file" id="pimg" accept="image/*" multiple onchange="prevImgs(this)"/><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> ছবি বেছে নিন (একাধিক সম্ভব, সর্বোচ্চ ১০টি)</div>
+      <div id="imgPrev"></div>
+    </div>
+    <div class="sbrow">
+      <button class="canbtn" onclick="closeModal('createModal')">বাতিল</button>
+      <button id="submitBtn" onclick="submitPost()">প্রকাশ করুন</button>
+    </div>
+  </div>
+</div>
+
+<!-- PROFILE MODAL -->
+<div class="modal" id="profileModal"></div>
+
+<!-- DONATE/CONTRIBUTE MODAL -->
+<div class="modal" id="donateModal">
+  <div class="mo" onclick="closeModal('donateModal')"></div>
+  <div class="mb" style="max-width:480px;padding:1.5rem;">
+    <button class="mcl" onclick="closeModal('donateModal')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <h2 style="font-family:'Amiri',serif;font-size:1.4rem;background:linear-gradient(100deg,var(--olive3),var(--orange3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> অবদান রাখুন</h2>
+    <p style="font-size:.84rem;color:var(--txt2);margin-bottom:1.3rem;line-height:1.8;">উদ্দীপ্ত তরুণ সংঘের কার্যক্রম পরিচালনায় আপনার সহযোগিতা আমাদের অনুপ্রেরণা।</p>
+    <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:.9rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.8rem;transition:all .22s;">
+      <div style="background:#e91e8c;width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;flex-shrink:0;box-shadow:0 4px 12px rgba(233,30,140,.3);">b</div>
+      <div><strong style="font-size:.87rem;">bKash</strong><br/><span style="font-size:.74rem;color:var(--txt2);">Personal / Send Money</span></div>
+      <span style="margin-left:auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);padding:.3rem .75rem;border-radius:8px;font-size:.81rem;font-family:'IBM Plex Mono',monospace;">01XXXXXXXXX</span>
+    </div>
+    <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:.9rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.8rem;transition:all .22s;">
+      <div style="background:#f7941d;width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.72rem;color:#fff;font-weight:700;flex-shrink:0;box-shadow:0 4px 12px rgba(247,148,29,.3);">N</div>
+      <div><strong style="font-size:.87rem;">Nagad</strong><br/><span style="font-size:.74rem;color:var(--txt2);">Personal / Send Money</span></div>
+      <span style="margin-left:auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);padding:.3rem .75rem;border-radius:8px;font-size:.81rem;font-family:'IBM Plex Mono',monospace;">01XXXXXXXXX</span>
+    </div>
+    <p style="font-size:.74rem;color:var(--txt2);text-align:center;margin-top:.8rem;">দান করার পর আমাদের সাথে যোগাযোগ করুন।</p>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- SEARCH MODAL -->
+<div class="modal" id="searchModal" style="align-items:flex-start;padding-top:4rem;">
+  <div class="mo" onclick="closeSearch()"></div>
+  <div class="srch-modal-box">
+    <!-- Search header -->
+    <div class="srch-hd">
+      <div class="srch-input-wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input id="srchMain" placeholder="খুঁজুন… (বাংলা বা Banglish — 'iftar', 'dawah', 'amar nam')" oninput="clearTimeout(window._srchT);window._srchT=setTimeout(runSearch,220)" autofocus/>
+        <button class="srch-clr-btn" id="srchClrBtn" onclick="clearSearch()" style="display:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <button class="srch-close-btn" onclick="closeSearch()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <!-- Filters row -->
+    <div class="srch-filters">
+      <div class="srch-filter-group">
+        <span class="srch-filter-label">বিভাগ</span>
+        <div class="srch-pills" id="typeFilters">
+          <button class="srch-pill active" data-val="" onclick="setSrchType(this,'')">সব</button>
+          <button class="srch-pill" data-val="blog" onclick="setSrchType(this,'blog')">কার্যক্রম</button>
+          <button class="srch-pill" data-val="guideline" onclick="setSrchType(this,'guideline')">নির্দেশিকা</button>
+        </div>
+      </div>
+      <div class="srch-filter-group">
+        <span class="srch-filter-label">ট্যাগ</span>
+        <div class="srch-custom-sel-wrap" id="srchTagWrap">
+          <button class="srch-custom-sel-btn" onclick="toggleSrchDd('tag',event)">
+            <span id="srchTagLabel">সব ট্যাগ</span>
+            <span class="srch-sel-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+          </button>
+          <div class="srch-custom-sel-dd" id="srchTagDd" style="display:none">
+            <div class="srch-dd-item srch-dd-active" data-val="" onclick="setSrchTag('',this)">সব ট্যাগ</div>
+          </div>
+        </div>
+      </div>
+      <div class="srch-filter-group">
+        <span class="srch-filter-label">মাস</span>
+        <input type="month" id="srchMonth" onchange="runSearch()" class="srch-month-inp"/>
+      </div>
+      <div class="srch-filter-group">
+        <span class="srch-filter-label">সাজান</span>
+        <div class="srch-custom-sel-wrap" id="srchSortWrap">
+          <button class="srch-custom-sel-btn" onclick="toggleSrchDd('sort',event)">
+            <span id="srchSortLabel">নতুন আগে</span>
+            <span class="srch-sel-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+          </button>
+          <div class="srch-custom-sel-dd" id="srchSortDd" style="display:none">
+            <div class="srch-dd-item srch-dd-active" data-val="newest" onclick="setSrchSort('newest','নতুন আগে',this)">নতুন আগে</div>
+            <div class="srch-dd-item" data-val="oldest" onclick="setSrchSort('oldest','পুরনো আগে',this)">পুরনো আগে</div>
+            <div class="srch-dd-item" data-val="liked" onclick="setSrchSort('liked','সবচেয়ে বেশি লাইক',this)">সবচেয়ে বেশি লাইক</div>
+            <div class="srch-dd-item" data-val="viewed" onclick="setSrchSort('viewed','সবচেয়ে বেশি দেখা',this)">সবচেয়ে বেশি দেখা</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="srch-status" id="srchStatus">টাইপ করুন বা ফিল্টার দিন…</div>
+    <div class="srch-results" id="srchResults"></div>
+  </div>
+</div>
+
+<!-- FLOATING THEME TOGGLE (mobile only) -->
+<button class="theme-toggle-fab" id="themeToggleFab" onclick="toggleTheme()" title="থিম পরিবর্তন করুন"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+
+<!-- LIGHTBOX -->
+<div id="lightbox" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.95);align-items:center;justify-content:center;flex-direction:column;gap:.8rem;" onclick="if(event.target.id==='lightbox')closeLightbox()">
+  <div class="lb-img" style="width:min(90vw,900px);height:min(80vh,700px);background-size:contain;background-repeat:no-repeat;background-position:center;border-radius:10px;"></div>
+  <div style="display:flex;align-items:center;gap:1.2rem;">
+    <button class="lb-prev" onclick="lbPrev()" style="display:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.1rem;align-items:center;justify-content:center;">‹</button>
+    <span class="lb-counter" style="color:rgba(255,255,255,.6);font-size:.82rem;min-width:50px;text-align:center;"></span>
+    <button class="lb-next" onclick="lbNext()" style="display:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.1rem;align-items:center;justify-content:center;">›</button>
+  </div>
+  <button onclick="closeLightbox()" style="position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1rem;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+</div>
+
+
+</body>
+</html>
