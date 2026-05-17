@@ -72,12 +72,12 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBnCgL4iEgeJrAT2Fla9JaZ3EnOe5JJoPg",
-  authDomain: "uddipto-4d584.firebaseapp.com",
-  projectId: "uddipto-4d584",
-  storageBucket: "uddipto-4d584.firebasestorage.app",
-  messagingSenderId: "512907631953",
-  appId: "1:512907631953:web:3478da28a734fcea680770",
+  apiKey: "__FIREBASE_API_KEY__",
+  authDomain: "__FIREBASE_AUTH_DOMAIN__",
+  projectId: "__FIREBASE_PROJECT_ID__",
+  storageBucket: "__FIREBASE_STORAGE_BUCKET__",
+  messagingSenderId: "__FIREBASE_MESSAGING_SENDER_ID__",
+  appId: "__FIREBASE_APP_ID__",
 };
 
 const app = initializeApp(firebaseConfig);
@@ -2168,7 +2168,7 @@ window.submitPost = async () => {
       ? Timestamp.fromDate(new Date(dateVal))
       : serverTimestamp();
     const tags = parseTags();
-    const IMGBB_KEY = "dfe17afe0b40c898b7354609b37f1d41"; // ⚠️ Move to a backend proxy to avoid quota abuse
+    const IMGBB_KEY = "__IMGBB_KEY__";
     const uploadImg = async (file) => {
       try {
         const base64 = await new Promise((res, rej) => {
