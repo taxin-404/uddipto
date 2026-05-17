@@ -8,16 +8,16 @@
 
 ```
 uddipto/
-│       ├── build.sh              ← Injects env vars at deploy time
-│       ├── .env.example          ← Copy to .env for local dev
-│       ├── public/
-│       │       ├── index.html    ← HTML
-│       │       ├── js/
-│       │       │   └── app.js    ← ALL the JavaScript (read the Table of Contents at the top)
-│       │       └── css/
-│       │           └── style.css ← CSS
-│       ├── firestore.rules       ← Firebase security rules — must be deployed!
-│       └── README.md             ← Everything documented here
+├── build.sh              ← Injects env vars at deploy time
+├── .env.example          ← Copy to .env for local dev
+├── public/
+│       ├── index.html    ← HTML
+│       ├── js/
+│       │   └── app.js    ← ALL the JavaScript (read the Table of Contents at the top)
+│       └── css/
+│           └── style.css ← CSS
+├── firestore.rules       ← Firebase security rules — must be deployed!
+└── README.md             ← Everything documented here
 ```
 
 The original was one 10k+ line file. It is now split into:
