@@ -53,13 +53,13 @@ The original was one 10k+ line file. It is now split into:
 
 | Variable | Value |
 |---|---|
-| `FIREBASE_API_KEY` | From Firebase config |
-| `FIREBASE_AUTH_DOMAIN` | `your-project.firebaseapp.com` |
-| `FIREBASE_PROJECT_ID` | `your-project` |
-| `FIREBASE_STORAGE_BUCKET` | `your-project.firebasestorage.app` |
-| `FIREBASE_MESSAGING_SENDER_ID` | From Firebase config |
-| `FIREBASE_APP_ID` | From Firebase config |
-| `IMGBB_KEY` | Your ImgBB API key |
+| `FIREBASE_API_KEY` | ⚠️ Get from Firebase Console → Project Settings → Web app |
+| `FIREBASE_AUTH_DOMAIN` | `uddipto-4d584.firebaseapp.com` |
+| `FIREBASE_PROJECT_ID` | `uddipto-4d584` |
+| `FIREBASE_STORAGE_BUCKET` | `uddipto-4d584.firebasestorage.app` |
+| `FIREBASE_MESSAGING_SENDER_ID` | `512907631953` |
+| `FIREBASE_APP_ID` | ⚠️ Get from Firebase Console → Project Settings → Web app |
+| `IMGBB_KEY` | ⚠️ Get from [api.imgbb.com](https://api.imgbb.com) |
 
 4. Deploy → Firebase → Authentication → Settings → **Authorized domains** → add your `.pages.dev` URL
 
