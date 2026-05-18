@@ -55,16 +55,16 @@ The project was originally a single 10k+ line file. It has been split into separ
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Cloudflare Pages                      │
+│                    Cloudflare Pages                     │
 │  ┌───────────────────────────────────────────────────┐  │
 │  │  build.sh (runs at deploy time)                   │  │
 │  │  Reads env vars → replaces __PLACEHOLDER__ in     │  │
 │  │  app.js with actual Firebase/ImgBB credentials    │  │
 │  └───────────────────────────────────────────────────┘  │
-│                          │                               │
-│                          ▼                               │
+│                          │                              │
+│                          ▼                              │
 │  ┌───────────────────────────────────────────────────┐  │
-│  │  public/ (static files served to browser)          │  │
+│  │  public/ (static files served to browser)         │  │
 │  │  index.html  →  css/style.css  →  js/app.js       │  │
 │  └───────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
