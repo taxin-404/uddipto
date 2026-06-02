@@ -781,6 +781,37 @@ function stripMd(md) {
   return tmp.textContent || tmp.innerText || "";
 }
 
+function renderExcerpt(md, maxLen) {
+  if (!md) return "";
+  let s = md;
+  // strip block-level syntax
+  s = s.replace(/```[\s\S]*?```/g, '');
+  s = s.replace(/^#{1,6}\s+/gm, '');
+  s = s.replace(/^(?:[-*_ ]{3,})\s*$/gm, '');
+  s = s.replace(/^>\s?/gm, '');
+  s = s.replace(/^[\t ]*[-*+]\s+/gm, '');
+  s = s.replace(/^[\t ]*\d+\.\s+/gm, '');
+  s = s.replace(/^[\t ]*[-*+] \[[ xX]\]\s*/gm, '');
+  s = s.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
+  // truncate at word boundary
+  s = s.trim();
+  if (s.length > maxLen) {
+    s = s.slice(0, maxLen).replace(/\s+\S*$/, '') + '…';
+  }
+  // escape HTML then apply inline markdown
+  s = esc(s);
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/_(.+?)_/g, '<em>$1</em>');
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return s;
+}
+
 function renderPosts(posts) {
   const grid = document.getElementById("postsGrid");
   if (!posts.length) {
@@ -863,7 +894,7 @@ function cardHtml(p) {
         </div>
       </div>
       <h3 class="card-title">${esc(p.title || "")}</h3>
-      ${hasText ? (() => { const pt = stripMd(p.body); return `<p class="card-excerpt">${esc(pt.slice(0, 120))}${pt.length > 120 ? "…" : ""}</p>`; })() : ""}
+      ${hasText ? `<p class="card-excerpt">${renderExcerpt(p.body, 120)}</p>` : ""}
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ""}
     </div>
     ${imgBlock}
@@ -945,7 +976,7 @@ window.openPost = async (id) => {
           <span>${esc(p.authorName || "")}</span>
           <span class="pm-rb">${p.authorRole || "user"}</span>
         </div>
-        ${p.body != null ? `<div class="pm-txt" id="pmBodyRaw" style="display:none">${esc(p.body)}</div><div class="pm-txt md-body" id="pmBody"></div>` : ""}
+        ${p.body != null ? `<div class="pm-txt md-body" id="pmBody"></div>` : ""}
         ${tagsHtml ? `<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>` : ""}
         ${imgHtml}
         <div class="pm-acts">
@@ -967,16 +998,8 @@ window.openPost = async (id) => {
         </div>
       </div>
     </div>`;
-  // Render body separately to ensure it works
   const pmBody = document.getElementById("pmBody");
-  if (pmBody && p.body != null) {
-    const raw = p.body || "";
-    const html = mdToHtml(raw);
-    console.log("openPost body:", JSON.stringify(raw), "html:", html.substring(0,200));
-    pmBody.innerHTML = html;
-  } else if (pmBody) {
-    pmBody.remove();
-  }
+  if (pmBody) pmBody.innerHTML = mdToHtml(p.body || "");
   document.getElementById("postModal").style.display = "flex";
   _pushModal("postModal");
   loadComments(id);
@@ -1909,8 +1932,7 @@ window.runSearch = () => {
     .map((p) => {
       const typeLabel =
         { blog: "কার্যক্রম", guideline: "নির্দেশিকা" }[p.type] || "কার্যক্রম";
-      const rawPlain = stripMd(p.body || "");
-      const excerpt = rawPlain.slice(0, 100) + (rawPlain.length > 100 ? "…" : "");
+      const excerpt = renderExcerpt(p.body || "", 100);
       const tagsHtml = (p.tags || [])
         .slice(0, 4)
         .map((t) => _tagHtml(t))
@@ -1922,11 +1944,11 @@ window.runSearch = () => {
         <div class="srch-item-meta">
           <span class="card-type-badge ct-${p.type || "blog"}">${typeLabel}</span>
           <span class="srch-item-time">${tAgo(p.createdAt)}</span>
-          <span class="srch-item-stat"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> ${p.likeCount || 0}</span>
+          <span class="srch-item-stat"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> ${p.likeCount || 0}</span>
           <span class="srch-item-stat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount || 0}</span>
         </div>
         <div class="srch-item-title">${esc(p.title || "Untitled")}</div>
-        ${excerpt ? `<div class="srch-item-excerpt">${esc(excerpt)}</div>` : ""}
+        ${excerpt ? `<div class="srch-item-excerpt">${excerpt}</div>` : ""}
         ${tagsHtml ? `<div class="srch-item-tags">${tagsHtml}</div>` : ""}
         <div class="srch-item-author">
           <img src="${esc(p.authorPhoto || "")}" onerror="this.style.display='none'"/>
