@@ -1,0 +1,186 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────
+    // HELPERS
+    // ─────────────────────────────────────────────
+
+    // ✅ PERFORMANCE FIX: Cache the user document in a variable so the
+    // get() call only happens ONCE per request, not once per function call.
+    // Previously, every rule check that called role() / isBlocked() / canPost()
+    // triggered a separate Firestore read — adding latency + burning read quota.
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Call userData() once and reuse — Firestore Rules engine caches
+    // get() results within a single request automatically in rules_version='2',
+    // but being explicit here makes it clear and safe.
+    function role() {
+      return request.auth != null ? userData().role : 'guest';
+    }
+
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    function isBlocked() {
+      return isLoggedIn() && role() == 'blocked';
+    }
+
+    function isAdmin() {
+      return isLoggedIn() && role() in ['admin', 'maintainer'];
+    }
+
+    function canPost() {
+      return isLoggedIn() && role() in ['admin', 'maintainer'];
+    }
+
+    function canEngage() {
+      return isLoggedIn() && !isBlocked();
+    }
+
+    function onlyChanging(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    function touches(field) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny([field]);
+    }
+
+    function validIncrement(field, delta) {
+      return request.resource.data[field] == resource.data[field] + delta;
+    }
+
+    function validLikeUpdate() {
+      let uid = request.auth.uid;
+      let wasLiked = uid in resource.data.likes;
+      return wasLiked
+        ? (validIncrement('likeCount', -1) && !(uid in request.resource.data.likes))
+        : (validIncrement('likeCount', 1)  &&   uid in request.resource.data.likes);
+    }
+
+
+    // ─────────────────────────────────────────────
+    // POSTS
+    // ─────────────────────────────────────────────
+    match /posts/{postId} {
+
+      allow read: if true;
+
+      allow create: if canPost()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.keys().hasAll(['title', 'type', 'authorId', 'createdAt'])
+        && request.resource.data.type in ['blog', 'guideline']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 300
+        && (!('body' in request.resource.data) || request.resource.data.body.size() <= 20000);
+
+      allow update: if isLoggedIn() && (
+
+        // ① Admin / maintainer: full update rights (pin, edit, delete fields, etc.)
+        isAdmin()
+
+        // ② Like / unlike — validated counter + map update
+        || (canEngage() && onlyChanging(['likes', 'likeCount']) && validLikeUpdate())
+
+        // ③ Save / unsave — blocked users can still save so they can revisit
+        || (isLoggedIn() && onlyChanging(['savedBy']))
+
+        // ④ View count — only +1, non-blocked users
+        || (canEngage() && onlyChanging(['viewCount']) && validIncrement('viewCount', 1))
+
+        // ⑤ Comment count — ±1, non-blocked users
+        || (canEngage() && onlyChanging(['commentCount']) && (
+              validIncrement('commentCount', 1) || validIncrement('commentCount', -1)
+            ))
+      );
+
+      allow delete: if isLoggedIn() && isAdmin();
+
+
+      // ── COMMENTS (subcollection) ──────────────
+      match /comments/{commentId} {
+
+        allow read: if true;
+
+        allow create: if canEngage()
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.keys().hasAll(['text', 'authorId', 'createdAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000;
+
+        allow update: if isAdmin()
+          && onlyChanging(['pinned']);
+
+        allow delete: if isLoggedIn() && (
+          isAdmin()
+          || (canEngage() && resource.data.authorId == request.auth.uid)
+        );
+      }
+    }
+
+
+    // ─────────────────────────────────────────────
+    // USERS
+    // ─────────────────────────────────────────────
+    match /users/{userId} {
+
+      allow read: if isAdmin() || (isLoggedIn() && request.auth.uid == userId);
+
+      allow create: if isLoggedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'user'
+        && request.resource.data.uid == userId;
+
+      allow update: if isLoggedIn() && (
+        isAdmin()
+        || (request.auth.uid == userId
+            && !touches('role')
+            && !touches('uid'))
+      );
+
+      allow delete: if false;
+    }
+
+
+    // ─────────────────────────────────────────────
+    // TAGS
+    // ─────────────────────────────────────────────
+    match /tags/{tagId} {
+
+      allow read: if true;
+
+      allow create: if canPost()
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // ─────────────────────────────────────────────
+    // REPORTS
+    // ─────────────────────────────────────────────
+    match /reports/{reportId} {
+
+      allow read: if isAdmin();
+
+      allow create: if isLoggedIn()
+        && request.resource.data.reportedBy == request.auth.uid
+        && request.resource.data.keys().hasAll(['type', 'reportedBy', 'reportedAt']);
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // ─────────────────────────────────────────────
+    // DENY EVERYTHING ELSE
+    // ─────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
