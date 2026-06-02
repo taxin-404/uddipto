@@ -945,7 +945,7 @@ window.openPost = async (id) => {
           <span>${esc(p.authorName || "")}</span>
           <span class="pm-rb">${p.authorRole || "user"}</span>
         </div>
-        ${p.body != null ? `<div class="pm-txt md-body" id="pmBody"></div>` : ""}
+        ${p.body != null ? `<div class="pm-txt" id="pmBodyRaw" style="display:none">${esc(p.body)}</div><div class="pm-txt md-body" id="pmBody"></div>` : ""}
         ${tagsHtml ? `<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>` : ""}
         ${imgHtml}
         <div class="pm-acts">
