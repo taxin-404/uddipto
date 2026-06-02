@@ -842,7 +842,8 @@ function cardHtml(p) {
     .join("");
 
   // Image layout: 1=full, 2=big+small, 3+=big+small+blur/count
-  let imgBlock = "";
+  // Keep card height consistent: same aspect-ratio block for image-less cards
+  let imgBlock = hasImgs ? "" : `<div class="card-img-placeholder"></div>`;
   if (hasImgs) {
     if (allImgs.length === 1) {
       imgBlock = `<div class="card-img-wrap ci-single" onclick="openPost('${p.id}')">
