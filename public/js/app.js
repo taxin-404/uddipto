@@ -788,8 +788,8 @@ function hasArabic(t) {
 function renderExcerpt(md, maxLen) {
   if (!md) return "";
   let s = md;
-  // strip block-level syntax (keep task/regular lists — handled later)
-  s = s.replace(/```[\s\S]*?```/g, '');
+  // extract text from code blocks instead of stripping entirely
+  s = s.replace(/```[\s\S]*?```/g, (m) => m.replace(/^```\w*\n?/, '').replace(/\n?```$/, ''));
   s = s.replace(/^#{1,6}\s+/gm, '');
   s = s.replace(/^(?:[-*_ ]{3,})\s*$/gm, '');
   s = s.replace(/^>\s?/gm, '');
