@@ -5229,3 +5229,83 @@
                 border-color: rgba(212, 163, 73, 0.5);
                 color: #7a5010;
             }
+            .md-guide {
+                padding: 0.25rem 0;
+            }
+            .md-guide-table-wrap {
+                overflow-x: auto;
+                border-radius: 8px;
+                border: 1px solid rgba(255,255,255,0.07);
+            }
+            .md-guide-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.78rem;
+                background: rgba(255,255,255,0.02);
+            }
+            .md-guide-table th {
+                text-align: left;
+                padding: 0.5rem 0.65rem;
+                background: rgba(255,255,255,0.05);
+                color: var(--txt2);
+                font-weight: 500;
+                font-size: 0.72rem;
+                text-transform: uppercase;
+                letter-spacing: 0.4px;
+                border-bottom: 1px solid rgba(255,255,255,0.08);
+                white-space: nowrap;
+            }
+            .md-guide-table td {
+                padding: 0.45rem 0.65rem;
+                border-bottom: 1px solid rgba(255,255,255,0.04);
+                color: var(--txt);
+            }
+            .md-guide-table tr:last-child td {
+                border-bottom: none;
+            }
+            .md-guide-table td.yes {
+                color: var(--amber3);
+                font-weight: 600;
+                text-align: center;
+            }
+            .md-guide-table td.no {
+                color: var(--txt3);
+                text-align: center;
+            }
+            .md-guide-table code {
+                font-size: 0.72rem;
+                background: rgba(255,255,255,0.06);
+                padding: 0.1em 0.35em;
+                border-radius: 4px;
+                font-family: "IBM Plex Mono", monospace;
+            }
+            .md-guide-table a {
+                color: var(--aqua2);
+                text-decoration: none;
+            }
+            .md-guide-table a:hover {
+                text-decoration: underline;
+            }
+            .md-guide-table .ex-task input[type="checkbox"] {
+                display: inline-block;
+                width: 0.85em;
+                height: 0.85em;
+                margin: 0;
+                accent-color: var(--amber3);
+                vertical-align: middle;
+                pointer-events: none;
+            }
+            .md-guide-legend {
+                display: flex;
+                gap: 1rem;
+                margin-top: 0.55rem;
+                font-size: 0.72rem;
+                color: var(--txt2);
+            }
+            .md-guide-legend .yes {
+                color: var(--amber3);
+                font-weight: 600;
+            }
+            .md-guide-legend .no {
+                color: var(--txt3);
+            }
