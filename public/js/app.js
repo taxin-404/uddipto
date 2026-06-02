@@ -440,7 +440,7 @@ function _setupScrollObserver() {
 }
 
 async function _loadMorePosts() {
-  if (_loadingMore || _allLoaded) return;
+  if (_loadingMore || _allLoaded || document.hidden) return;
   _loadingMore = true;
 
   const grid = document.getElementById("postsGrid");
@@ -671,6 +671,7 @@ window.loadPosts = async (page = currentPage) => {
         orderBy("createdAt", "desc"),
       ),
       (snap2) => {
+        if (document.hidden) return;
         let hasNew = false;
         snap2.docChanges().forEach((change) => {
           if (change.type === "added") {
@@ -832,6 +833,26 @@ function renderExcerpt(md, maxLen) {
   return s;
 }
 
+let _lazyObserver = null;
+function observeLazyImgs() {
+  if (!_lazyObserver) {
+    _lazyObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.querySelectorAll("[data-src]").forEach((el) => {
+          el.style.backgroundImage = "url('" + el.getAttribute("data-src") + "')";
+          el.removeAttribute("data-src");
+        });
+        _lazyObserver.unobserve(entry.target);
+      });
+    }, { rootMargin: "200px" });
+  }
+  document.querySelectorAll(".lazy-img:not(.lazy-loaded)").forEach((el) => {
+    el.classList.add("lazy-loaded");
+    _lazyObserver.observe(el);
+  });
+}
+
 function renderPosts(posts) {
   const grid = document.getElementById("postsGrid");
   if (!posts.length) {
@@ -842,6 +863,7 @@ function renderPosts(posts) {
   const pinned = posts.filter((p) => isPinnedActive(p));
   const rest = posts.filter((p) => !isPinnedActive(p));
   grid.innerHTML = [...pinned, ...rest].map(cardHtml).join("");
+  observeLazyImgs();
 }
 
 function cardHtml(p) {
@@ -859,29 +881,28 @@ function cardHtml(p) {
     .map((t) => _tagHtml(t, `event.stopPropagation();filterByTag('${esc(t)}')`))
     .join("");
 
-  // Image layout: 1=full, 2=big+small, 3+=big+small+blur/count
+  // Lazy-loaded image layout: 1=full, 2=big+small, 3+=big+small+blur/count
   let imgBlock = "";
   if (hasImgs) {
     if (allImgs.length === 1) {
-      imgBlock = `<div class="card-img-wrap ci-single" onclick="openPost('${p.id}')">
-        <div class="ci-full" style="background-image:url('${esc(allThumbs[0] || allImgs[0])}')"></div>
+      imgBlock = `<div class="card-img-wrap ci-single lazy-img" onclick="openPost('${p.id}')">
+        <div class="ci-full" data-src="${esc(allThumbs[0] || allImgs[0])}"></div>
       </div>`;
     } else if (allImgs.length === 2) {
-      // Two images: big left + full-height right — no fake blurred 3rd panel
-      imgBlock = `<div class="card-img-wrap ci-equal" onclick="openPost('${p.id}')">
-        <div class="ci-main" style="background-image:url('${esc(allThumbs[0] || allImgs[0])}')"></div>
-        <div class="ci-main" style="background-image:url('${esc(allThumbs[1] || allImgs[1])}')"></div>
+      imgBlock = `<div class="card-img-wrap ci-equal lazy-img" onclick="openPost('${p.id}')">
+        <div class="ci-main" data-src="${esc(allThumbs[0] || allImgs[0])}"></div>
+        <div class="ci-main" data-src="${esc(allThumbs[1] || allImgs[1])}"></div>
       </div>`;
     } else {
       // 3+ images: big left + top-right + bottom-right (with count if >3)
       const extra = allImgs.length - 3;
       const ci_s2_overlay =
         extra > 0 ? `<div class="ci-overlay">+${extra}</div>` : "";
-      imgBlock = `<div class="card-img-wrap" onclick="openPost('${p.id}')">
-        <div class="ci-main" style="background-image:url('${esc(allThumbs[0] || allImgs[0])}')"></div>
+      imgBlock = `<div class="card-img-wrap lazy-img" onclick="openPost('${p.id}')">
+        <div class="ci-main" data-src="${esc(allThumbs[0] || allImgs[0])}"></div>
         <div class="ci-side">
-          <div class="ci-s1" style="background-image:url('${esc(allThumbs[1] || allImgs[1])}')"></div>
-          <div class="ci-s2" style="background-image:url('${esc(allThumbs[2] || allImgs[2])}')">
+          <div class="ci-s1" data-src="${esc(allThumbs[1] || allImgs[1])}"></div>
+          <div class="ci-s2" data-src="${esc(allThumbs[2] || allImgs[2])}">
             ${ci_s2_overlay}
           </div>
         </div>
@@ -980,7 +1001,7 @@ window.openPost = async (id) => {
   window._postImgs = allImgs;
   let imgHtml = "";
   if (allImgs.length === 1) {
-    imgHtml = `<div class="pm-img-single" onclick="openLightbox(0)"><img src="${esc(allImgs[0])}" alt=""><div class="pm-img-hover"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`;
+    imgHtml = `<div class="pm-img-single" onclick="openLightbox(0)"><img src="${esc(allImgs[0])}" alt="" loading="lazy"><div class="pm-img-hover"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`;
   } else if (allImgs.length > 1) {
     imgHtml = `<div class="pm-gallery">${allImgs.map((u, i) => `<div class="pm-gimg" style="background-image:url('${esc(u)}')" onclick="openLightbox(${i})"><div class="pm-gimg-hover"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`).join("")}</div>`;
   }
