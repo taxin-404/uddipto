@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="bn">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>উদ্দীপ্ত তরুণ সংঘ</title>
+        <meta name="color-scheme" content="light dark" />
+        <meta name="darkreader-lock" />
+
+        <!-- SEO -->
+        <meta name="description" content="উদ্দীপ্ত তরুণ সংঘ — দাওয়াহ ও ইসলামিক কার্যক্রমের একটি উন্মুক্ত প্ল্যাটফর্ম।" />
+        <meta name="keywords" content="উদ্দীপ্ত তরুণ সংঘ, dawah, ইসলাম, কার্যক্রম, নির্দেশিকা, Bangladesh" />
+        <link rel="canonical" href="https://uddipto.pages.dev/" />
+
+        <!-- Open Graph -->
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="উদ্দীপ্ত তরুণ সংঘ" />
+        <meta property="og:title" content="উদ্দীপ্ত তরুণ সংঘ" />
+        <meta property="og:description" content="দাওয়াহ ও ইসলামিক কার্যক্রমের একটি উন্মুক্ত প্ল্যাটফর্ম।" />
+        <meta property="og:url" content="https://uddipto.pages.dev/" />
+        <meta property="og:image" content="https://i.imgur.com/mM0KGjk.jpeg" />
+        <meta property="og:image:width" content="512" />
+        <meta property="og:image:height" content="512" />
+        <meta property="og:locale" content="bn_BD" />
+
+        <!-- Twitter / X Card -->
+        <meta name="twitter:card" content="summary" />
+        <meta name="twitter:title" content="উদ্দীপ্ত তরুণ সংঘ" />
+        <meta name="twitter:description" content="দাওয়াহ ও ইসলামিক কার্যক্রমের একটি উন্মুক্ত প্ল্যাটফর্ম।" />
+        <meta name="twitter:image" content="https://i.imgur.com/mM0KGjk.jpeg" />
+
+        <!-- ✅ FIX 1: Apply theme instantly before any paint (prevents flash) -->
+        <script>
+            (function () {
+                var t = localStorage.getItem("uts-theme");
+                if (!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+                document.documentElement.setAttribute("data-theme", t);
+            })();
+        </script>
+
+        <link rel="icon" type="image/png" href="favicon.png" />
+
+        <!-- ✅ FIX 2: preconnect to Google Fonts — reduces DNS + TLS time by ~200ms -->
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+        <!-- ✅ FIX 3: Load only 3 fonts (removed Inter — not used in critical UI) -->
+        <link
+            href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Hind+Siliguri:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+            rel="stylesheet"
+        />
+
+        <!-- ✅ FIX 4: CSS is now a separate file — Cloudflare caches it independently -->
+        <link rel="stylesheet" href="css/style.css" />
+
+        <!-- ✅ FIX 5: preconnect to Firebase & ImgBB CDNs so TCP is ready when app.js fires -->
+        <link rel="preconnect" href="https://firestore.googleapis.com" />
+        <link rel="preconnect" href="https://identitytoolkit.googleapis.com" />
+        <link rel="dns-prefetch" href="https://api.imgbb.com" />
+        <link rel="dns-prefetch" href="https://i.ibb.co" />
+
+        <!-- ✅ FIX 6: app.js loaded as module — deferred by default, doesn't block render -->
+        <script type="module" src="js/app.js"></script>
+    </head>
+    <body>
+        <!-- HERO -->
+        <div class="hero">
+            <div class="nav-outer">
+                <nav>
+                    <!-- LEFT: logo only -->
+                    <div class="nav-left">
+                        <a href="#" class="nav-logo">
+                            <img
+                                src="https://i.imgur.com/mM0KGjk.jpeg"
+                                alt="উদ্দীপ্ত তরুণ সংঘ"
+                                onerror="this.style.display='none'"
+                                width="32" height="32"
+                                loading="eager"
+                            />
+                            <div class="nav-logo-text">
+                                <strong>উদ্দীপ্ত তরুণ সংঘ</strong>
+                                <em>DAWAH COMMUNITY</em>
+                            </div>
+                        </a>
+                    </div>
+
+                    <!-- CENTER: liquid glass pill with all 4 tabs -->
+                    <div class="nav-center">
+                        <div class="nav-pill-group">
+                            <button class="nav-tab active" data-page="recent" onclick="loadPosts('recent')">
+                                <span class="nt-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+                                <span class="nt-label">সাম্প্রতিক</span>
+                            </button>
+                            <button class="nav-tab" data-page="blog" onclick="loadPosts('blog')">
+                                <span class="nt-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
+                                <span class="nt-label">কার্যক্রম</span>
+                            </button>
+                            <button class="nav-tab" data-page="guideline" onclick="loadPosts('guideline')">
+                                <span class="nt-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
+                                <span class="nt-label">নির্দেশিকা</span>
+                            </button>
+                            <button class="nav-tab nav-tab-search" onclick="openSearch()" title="Search">
+                                <span class="nt-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
+                                <span class="nt-label">খুঁজুন</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT: profile/login -->
+                    <div class="nav-right">
+                        <button id="loginBtn" onclick="loginWithGoogle()">
+                            <svg class="g-logo" width="14" height="14" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                                <path fill="#EA4335" d="M24 9.5c3.14 0 5.95 1.08 8.17 2.86l6.08-6.08C34.42 3.19 29.5 1 24 1 14.82 1 7.08 6.54 3.87 14.27l7.08 5.5C12.66 13.44 17.88 9.5 24 9.5z"/>
+                                <path fill="#4285F4" d="M46.1 24.55c0-1.64-.15-3.22-.42-4.75H24v9.01h12.42c-.54 2.9-2.18 5.36-4.64 7.01l7.14 5.55C43.13 37.22 46.1 31.38 46.1 24.55z"/>
+                                <path fill="#FBBC05" d="M10.95 28.23A14.6 14.6 0 0 1 9.5 24c0-1.47.25-2.89.69-4.23l-7.08-5.5A23.94 23.94 0 0 0 0 24c0 3.88.93 7.55 2.58 10.8l8.37-6.57z"/>
+                                <path fill="#34A853" d="M24 47c5.5 0 10.12-1.82 13.49-4.95l-7.14-5.55c-1.98 1.33-4.5 2.1-6.35 2.1-6.12 0-11.32-4.12-13.05-9.67l-8.37 6.57C7.08 41.46 14.82 47 24 47z"/>
+                                <path fill="none" d="M0 0h48v48H0z"/>
+                            </svg>
+                            <span class="login-label">Login</span>
+                        </button>
+                        <div id="profileArea">
+                            <button class="pa-btn" onclick="openProfile()">
+                                <img class="pa-img" src="" alt="" referrerpolicy="no-referrer" width="28" height="28" />
+                                <span class="pa-name"></span>
+                            </button>
+                        </div>
+                    </div>
+                </nav>
+            </div>
+
+            <!-- SPLIT: left content + right logo card -->
+            <div class="hero-split">
+                <div class="hero-left">
+                    <div class="hero-pill">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        ইমান <span class="hero-pill-dot">·</span> জ্ঞান <span class="hero-pill-dot">·</span> বিনির্মাণ
+                    </div>
+                    <div class="hero-title-wrap">
+                        <p class="hero-title-top">উদ্দীপ্ত</p>
+                        <p class="hero-title-bottom">তরুণ সংঘ</p>
+                    </div>
+                    <div class="hero-quote">
+                        <p>"আর তোমাদের মধ্যে এমন একটি দল যেন থাকে, যারা কল্যাণের দিকে আহ্বান করবে এবং সৎকাজের আদেশ দিবে ও অসৎকাজে নিষেধ করবে। আর তারাই সফলকাম।"</p>
+                        <cite>— SURAH AL-IMRAN : 104</cite>
+                    </div>
+                    <div class="hero-btns">
+                        <button class="hero-btn-primary" onclick="loadPosts('blog')">কার্যক্রম দেখুন →</button>
+                        <button class="hero-btn-secondary" onclick="loadPosts('guideline')">নির্দেশনা পড়ুন</button>
+                    </div>
+                </div>
+                <div class="hero-logo-card">
+                    <!-- ✅ FIX 7: eager + explicit dimensions prevents layout shift -->
+                    <img src="https://i.imgur.com/mM0KGjk.jpeg" alt="উদ্দীপ্ত তরুণ সংঘ" loading="eager" width="280" height="280" onerror="this.style.display='none'" />
+                </div>
+            </div>
+
+            <!-- FEATURE BOXES -->
+            <div class="hero-features">
+                <div class="hero-feature">
+                    <span class="hero-feature-num">01</span>
+                    <div class="hero-feature-icon fi-green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
+                    <p class="hero-feature-name">ঈমান</p>
+                    <p class="hero-feature-sub">إيمان</p>
+                    <p class="hero-feature-desc">Faith as foundation</p>
+                </div>
+                <div class="hero-feature">
+                    <span class="hero-feature-num">02</span>
+                    <div class="hero-feature-icon fi-teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                    </div>
+                    <p class="hero-feature-name">জ্ঞান</p>
+                    <p class="hero-feature-sub">علم</p>
+                    <p class="hero-feature-desc">Knowledge that liberates</p>
+                </div>
+                <div class="hero-feature">
+                    <span class="hero-feature-num">03</span>
+                    <div class="hero-feature-icon fi-orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>
+                    </div>
+                    <p class="hero-feature-name">বিনির্মাণ</p>
+                    <p class="hero-feature-sub">تفكيك</p>
+                    <p class="hero-feature-desc">Building a just society</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- MAIN -->
+        <div class="page-area">
+            <main>
+                <div class="sec-head">
+                    <div class="sec-label" id="sectionLabel">সাম্প্রতিক · LATEST</div>
+                    <h2 class="sec-title" id="sectionTitle">সাম্প্রতিক পোস্ট</h2>
+                    <p class="sec-desc" id="sectionDesc">এই মাসের সাম্প্রতিক পোস্টসমূহ</p>
+                </div>
+                <div class="grid" id="postsGrid"></div>
+            </main>
+
+            <!-- ABOUT & FOOTER -->
+            <div class="about-section">
+                <h3>আমাদের সম্পর্কে · About Us</h3>
+                <p>উদ্দীপ্ত তরুণ সংঘ একটি দাওয়াহ কমিউনিটি প্ল্যাটফর্ম — যেখানে ইসলামিক জ্ঞান, নির্দেশিকা এবং ভ্রাতৃত্বের চর্চা হয়।</p>
+                <p>This platform exists to spread beneficial knowledge and build a community around Islamic guidance and dawah activities.</p>
+                <div class="about-btns">
+                    <a href="#" class="about-btn-primary" onclick="document.getElementById('donateModal').style.display='flex'">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                        অবদান রাখুন · Contribute
+                    </a>
+                    <a href="mailto:contact@uddipto.org" class="about-btn-sec">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                        যোগাযোগ করুন
+                    </a>
+                </div>
+            </div>
+            <footer>
+                <p>© ২০২৬ উদ্দীপ্ত তরুণ সংঘ · সকল অধিকার সংরক্ষিত</p>
+            </footer>
+        </div>
+
+        <!-- FLOATING COMMENT BOX -->
+        <div id="commentBox"></div>
+
+        <!-- POST VIEW MODAL -->
+        <div class="modal" id="postModal"></div>
+
+        <!-- CREATE POST MODAL -->
+        <div class="modal" id="createModal">
+            <div class="mo" onclick="closeModal('createModal')"></div>
+            <div class="mb creatmb">
+                <button class="mcl" onclick="closeModal('createModal')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                <h2>নতুন পোস্ট · New Post</h2>
+                <div class="fg">
+                    <label>Post Type</label>
+                    <select id="ptype">
+                        <option value="blog">কার্যক্রম · Activities</option>
+                        <option value="guideline">নির্দেশিকা · Guideline</option>
+                    </select>
+                </div>
+                <div class="fg"><label>শিরোনাম · Title</label><input id="ptitle" placeholder="পোস্টের শিরোনাম…" /></div>
+                <div class="fg">
+                  <label>বিষয়বস্তু · Content (optional)
+                    <span style="color:var(--txt2);font-weight:400;text-transform:none">
+                      — Markdown supported
+                    </span>
+                  </label>
+                  <div class="md-editor-row">
+                    <textarea id="pbody" placeholder="Markdown লিখুন…&#10;&#10;# শিরোনাম&#10;**বোল্ড** *ইটালিক*&#10;- লিস্ট&#10;`কোড`" oninput="updateMdPreview()"></textarea>
+                  </div>
+                  <div id="mdPreview" class="md-preview-box md-body"><p class="md-preview-placeholder">Preview will appear here…</p></div>
+                </div>
+                <div class="fg">
+                    <label>ট্যাগ · Tags <span style="color:var(--txt2);font-weight:400;text-transform:none">(max 5)</span></label>
+                    <div class="tag-picker-wrap">
+                        <div id="tagChips" class="tag-chips-row"></div>
+                        <div class="tag-picker-input-row">
+                            <input id="tagSearchInp" placeholder="ট্যাগ খুঁজুন বা নতুন লিখুন…" oninput="tagPickerSearch(this.value)" onfocus="tagPickerOpen()" autocomplete="off" />
+                            <button class="tag-dropdown-btn" onclick="tagPickerToggle(event)" title="সব ট্যাগ দেখুন"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+                        </div>
+                        <div id="tagDropdown" class="tag-dropdown-box" style="display:none"></div>
+                    </div>
+                    <div class="tag-hint">ট্যাগ সার্চ করুন বা ক্লিক করে যোগ করুন · max 5</div>
+                </div>
+                <div class="fg">
+                    <label>তারিখ · Post Date <span style="color:var(--txt2);font-weight:400;text-transform:none">(না দিলে এখনকার সময়)</span></label>
+                    <input type="datetime-local" id="pdate" style="width:100%" />
+                    <div class="tag-hint">পুরনো তারিখে পোস্ট করতে চাইলে এখানে সেট করুন</div>
+                </div>
+                <div class="fg">
+                    <label>ছবি · Images <span style="color:var(--txt2);font-weight:400;text-transform:none">(optional, max 10)</span></label>
+                    <div class="img-drop">
+                        <input type="file" id="pimg" accept="image/*" multiple onchange="prevImgs(this)" />
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        ছবি বেছে নিন (একাধিক সম্ভব, সর্বোচ্চ ১০টি)
+                    </div>
+                    <div id="imgPrev"></div>
+                </div>
+                <div class="sbrow">
+                    <button class="canbtn" onclick="closeModal('createModal')">বাতিল</button>
+                    <button id="submitBtn" onclick="submitPost()">প্রকাশ করুন</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROFILE MODAL -->
+        <div class="modal" id="profileModal"></div>
+
+        <!-- DONATE MODAL -->
+        <div class="modal" id="donateModal">
+            <div class="mo" onclick="closeModal('donateModal')"></div>
+            <div class="mb" style="max-width:480px;padding:1.5rem">
+                <button class="mcl" onclick="closeModal('donateModal')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                <h2 style="font-family:'Amiri',serif;font-size:1.4rem;background:linear-gradient(100deg,var(--olive3),var(--orange3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    অবদান রাখুন
+                </h2>
+                <p style="font-size:0.84rem;color:var(--txt2);margin-bottom:1.3rem;line-height:1.8">উদ্দীপ্ত তরুণ সংঘের কার্যক্রম পরিচালনায় আপনার সহযোগিতা আমাদের অনুপ্রেরণা।</p>
+                <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:.9rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.8rem">
+                    <div style="background:#e91e8c;width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;flex-shrink:0;box-shadow:0 4px 12px rgba(233,30,140,.3)">b</div>
+                    <div><strong style="font-size:.87rem">bKash</strong><br /><span style="font-size:.74rem;color:var(--txt2)">Personal / Send Money</span></div>
+                    <span style="margin-left:auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);padding:.3rem .75rem;border-radius:8px;font-size:.81rem;font-family:'IBM Plex Mono',monospace">01XXXXXXXXX</span>
+                </div>
+                <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:.9rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.8rem">
+                    <div style="background:#f7941d;width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:.72rem;color:#fff;font-weight:700;flex-shrink:0;box-shadow:0 4px 12px rgba(247,148,29,.3)">N</div>
+                    <div><strong style="font-size:.87rem">Nagad</strong><br /><span style="font-size:.74rem;color:var(--txt2)">Personal / Send Money</span></div>
+                    <span style="margin-left:auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);padding:.3rem .75rem;border-radius:8px;font-size:.81rem;font-family:'IBM Plex Mono',monospace">01XXXXXXXXX</span>
+                </div>
+                <p style="font-size:.74rem;color:var(--txt2);text-align:center;margin-top:.8rem">দান করার পর আমাদের সাথে যোগাযোগ করুন।</p>
+            </div>
+        </div>
+
+        <div class="toast" id="toast"></div>
+
+        <!-- SEARCH MODAL -->
+        <div class="modal" id="searchModal" style="align-items:flex-start;padding-top:4rem">
+            <div class="mo" onclick="closeSearch()"></div>
+            <div class="srch-modal-box">
+                <div class="srch-hd">
+                    <div class="srch-input-wrap">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                        <input id="srchMain" placeholder="খুঁজুন… (বাংলা বা Banglish — 'iftar', 'dawah', 'amar nam')" oninput="clearTimeout(window._srchT);window._srchT=setTimeout(runSearch,220)" autofocus />
+                        <button class="srch-clr-btn" id="srchClrBtn" onclick="clearSearch()" style="display:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                    </div>
+                    <button class="srch-close-btn" onclick="closeSearch()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
+                <div class="srch-filters">
+                    <div class="srch-filter-group">
+                        <span class="srch-filter-label">বিভাগ</span>
+                        <div class="srch-pills" id="typeFilters">
+                            <button class="srch-pill active" data-val="" onclick="setSrchType(this,'')">সব</button>
+                            <button class="srch-pill" data-val="blog" onclick="setSrchType(this,'blog')">কার্যক্রম</button>
+                            <button class="srch-pill" data-val="guideline" onclick="setSrchType(this,'guideline')">নির্দেশিকা</button>
+                        </div>
+                    </div>
+                    <div class="srch-filter-group">
+                        <span class="srch-filter-label">ট্যাগ</span>
+                        <div class="srch-custom-sel-wrap" id="srchTagWrap">
+                            <button class="srch-custom-sel-btn" onclick="toggleSrchDd('tag',event)">
+                                <span id="srchTagLabel">সব ট্যাগ</span>
+                                <span class="srch-sel-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                            </button>
+                            <div class="srch-custom-sel-dd" id="srchTagDd" style="display:none">
+                                <div class="srch-dd-item srch-dd-active" data-val="" onclick="setSrchTag('',this)">সব ট্যাগ</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="srch-filter-group">
+                        <span class="srch-filter-label">মাস</span>
+                        <input type="month" id="srchMonth" onchange="runSearch()" class="srch-month-inp" />
+                    </div>
+                    <div class="srch-filter-group">
+                        <span class="srch-filter-label">সাজান</span>
+                        <div class="srch-custom-sel-wrap" id="srchSortWrap">
+                            <button class="srch-custom-sel-btn" onclick="toggleSrchDd('sort',event)">
+                                <span id="srchSortLabel">নতুন আগে</span>
+                                <span class="srch-sel-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                            </button>
+                            <div class="srch-custom-sel-dd" id="srchSortDd" style="display:none">
+                                <div class="srch-dd-item srch-dd-active" data-val="newest" onclick="setSrchSort('newest','নতুন আগে',this)">নতুন আগে</div>
+                                <div class="srch-dd-item" data-val="oldest" onclick="setSrchSort('oldest','পুরনো আগে',this)">পুরনো আগে</div>
+                                <div class="srch-dd-item" data-val="liked" onclick="setSrchSort('liked','সবচেয়ে বেশি লাইক',this)">সবচেয়ে বেশি লাইক</div>
+                                <div class="srch-dd-item" data-val="viewed" onclick="setSrchSort('viewed','সবচেয়ে বেশি দেখা',this)">সবচেয়ে বেশি দেখা</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="srch-status" id="srchStatus">টাইপ করুন বা ফিল্টার দিন…</div>
+                <div class="srch-results" id="srchResults"></div>
+            </div>
+        </div>
+
+        <!-- FAB GROUP -->
+        <div class="fab-group">
+            <button id="newPostBtn" class="fab-new-post" onclick="openCreatePost()" title="নতুন পোস্ট">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <button class="theme-toggle-fab" id="themeToggleFab" onclick="toggleTheme()" title="থিম পরিবর্তন করুন">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+        </div>
+
+        <!-- LIGHTBOX -->
+        <div id="lightbox" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.95);align-items:center;justify-content:center;flex-direction:column;gap:.8rem" onclick="if(event.target.id==='lightbox')closeLightbox();">
+            <div class="lb-img" style="width:min(90vw,900px);height:min(80vh,700px);background-size:contain;background-repeat:no-repeat;background-position:center;border-radius:10px"></div>
+            <div style="display:flex;align-items:center;gap:1.2rem">
+                <button class="lb-prev" onclick="lbPrev()" style="display:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.1rem;align-items:center;justify-content:center">‹</button>
+                <span class="lb-counter" style="color:rgba(255,255,255,.6);font-size:.82rem;min-width:50px;text-align:center"></span>
+                <button class="lb-next" onclick="lbNext()" style="display:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;font-size:1.1rem;align-items:center;justify-content:center">›</button>
+            </div>
+            <button onclick="closeLightbox()" style="position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1rem">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+
+        <!-- PIN POST MODAL -->
+        <div class="pin-modal-overlay" id="pinModalOverlay">
+            <div class="pin-modal">
+                <h3><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg> পোস্ট পিন করুন</h3>
+                <p style="font-size:.78rem;color:var(--txt2);margin:0 0 1rem">কতক্ষণের জন্য পিন করতে চান?</p>
+                <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:var(--txt2);margin-bottom:.75rem;cursor:pointer">
+                    <input type="checkbox" id="pinUnlimited" style="accent-color:var(--amber3);width:15px;height:15px;cursor:pointer" />
+                    সীমাহীন সময়ের জন্য পিন করুন
+                </label>
+                <div class="pin-custom-row">
+                    <div class="pin-field"><label>দিন</label><input type="number" id="pinDays" min="0" max="365" placeholder="0" value="0" /></div>
+                    <div class="pin-field"><label>ঘণ্টা</label><input type="number" id="pinHours" min="0" max="23" placeholder="0" value="0" /></div>
+                    <div class="pin-field"><label>মিনিট</label><input type="number" id="pinMins" min="0" max="59" placeholder="0" value="0" /></div>
+                </div>
+                <p class="pin-preview" id="pinPreview">মোট সময়: —</p>
+                <div class="pin-modal-actions">
+                    <button class="pin-unpin-btn" id="pinUnpinBtn" style="display:none" onclick="unpinPost()">আনপিন করুন</button>
+                    <button class="pin-btn-cancel" onclick="closePinModal()">বাতিল</button>
+                    <button class="pin-btn-confirm" onclick="confirmPinPost()">পিন করুন</button>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
