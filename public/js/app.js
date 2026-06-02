@@ -781,6 +781,10 @@ function stripMd(md) {
   return tmp.textContent || tmp.innerText || "";
 }
 
+function hasArabic(t) {
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(t);
+}
+
 function renderExcerpt(md, maxLen) {
   if (!md) return "";
   let s = md;
@@ -840,6 +844,8 @@ function cardHtml(p) {
   const allThumbs = [p.imageThumb || p.imageUrl, ...(p.imageThumbs || p.images || [])].filter(Boolean);
   const hasText = !!(p.body || "").trim();
   const hasImgs = allImgs.length > 0;
+  const isAr = hasText && hasArabic(p.body);
+  const isArTitle = hasArabic(p.title || "");
   const tagsHtml = (p.tags || [])
     .map((t) => _tagHtml(t, `event.stopPropagation();filterByTag('${esc(t)}')`))
     .join("");
@@ -900,8 +906,8 @@ function cardHtml(p) {
           <span class="card-type-badge ct-${p.type || "blog"}">${typeLabel}</span>
         </div>
       </div>
-      <h3 class="card-title">${esc(p.title || "")}</h3>
-      ${hasText ? `<p class="card-excerpt">${renderExcerpt(p.body, hasImgs ? 120 : 400)}</p>` : ""}
+      <h3 class="card-title${isArTitle ? " arabic" : ""}"${isArTitle ? ' dir="rtl"' : ""}>${esc(p.title || "")}</h3>
+      ${hasText ? `<p class="card-excerpt${isAr ? " arabic" : ""}"${isAr ? ' dir="rtl"' : ""}>${renderExcerpt(p.body, hasImgs ? 120 : 400)}</p>` : ""}
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ""}
     </div>
     ${imgBlock}
@@ -955,6 +961,8 @@ window.openPost = async (id) => {
   const allThumbs = [p.imageThumb || p.imageUrl, ...(p.imageThumbs || p.images || [])].filter(Boolean);
   const typeLabel =
     { blog: "কার্যক্রম", guideline: "নির্দেশিকা" }[p.type] || "কার্যক্রম";
+  const pmArBody = p.body && hasArabic(p.body);
+  const pmArTitle = hasArabic(p.title || "");
   const tagsHtml = (p.tags || [])
     .map((t) => _tagHtml(t, `filterByTag('${esc(t)}')`))
     .join("");
@@ -977,13 +985,13 @@ window.openPost = async (id) => {
           <span class="card-type-badge ct-${p.type || "blog"}">${typeLabel}</span>
           <span>${tAgo(p.createdAt)}</span><span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount || 0}</span>
         </div>
-        <h2 class="pm-title">${esc(p.title || "")}</h2>
+        <h2 class="pm-title${pmArTitle ? " arabic" : ""}"${pmArTitle ? ' dir="rtl"' : ""}>${esc(p.title || "")}</h2>
         <div class="pm-auth">
           <img src="${esc(p.authorPhoto || "")}" onerror="this.style.display='none'"/>
           <span>${esc(p.authorName || "")}</span>
           <span class="pm-rb">${p.authorRole || "user"}</span>
         </div>
-        ${p.body != null ? `<div class="pm-txt md-body" id="pmBody"></div>` : ""}
+        ${p.body != null ? `<div class="pm-txt md-body${pmArBody ? " arabic" : ""}" id="pmBody"${pmArBody ? ' dir="rtl"' : ""}></div>` : ""}
         ${tagsHtml ? `<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>` : ""}
         ${imgHtml}
         <div class="pm-acts">
@@ -1975,9 +1983,16 @@ window.updateMdPreview = () => {
     const textarea = document.getElementById("pbody");
     const preview = document.getElementById("mdPreview");
     if (!textarea || !preview) return;
-    preview.innerHTML = textarea.value.trim()
-      ? mdToHtml(textarea.value)
-      : '<p class="md-preview-placeholder">Preview will appear here…</p>';
+    const val = textarea.value.trim();
+    if (val) {
+      preview.innerHTML = mdToHtml(val);
+      preview.dir = hasArabic(val) ? "rtl" : "";
+      preview.classList.toggle("arabic", hasArabic(val));
+    } else {
+      preview.innerHTML = '<p class="md-preview-placeholder">Preview will appear here…</p>';
+      preview.dir = "";
+      preview.classList.remove("arabic");
+    }
   }, 250);
 };
 
