@@ -1874,24 +1874,18 @@ window.runSearch = () => {
     .join("");
 };
 
-// ── MARKDOWN PREVIEW ──
-window.toggleMdPreview = () => {
-  const textarea = document.getElementById("pbody");
-  const preview = document.getElementById("mdPreview");
-  const btn = document.getElementById("mdPreviewBtn");
-  if (!textarea || !preview || !btn) return;
-  if (preview.style.display === "none") {
-    preview.style.display = "block";
-    textarea.style.display = "none";
+// ── MARKDOWN LIVE PREVIEW ──
+let _mdPreviewTimer = null;
+window.updateMdPreview = () => {
+  clearTimeout(_mdPreviewTimer);
+  _mdPreviewTimer = setTimeout(() => {
+    const textarea = document.getElementById("pbody");
+    const preview = document.getElementById("mdPreview");
+    if (!textarea || !preview) return;
     preview.innerHTML = textarea.value.trim()
       ? mdToHtml(textarea.value)
-      : '<p style="color:var(--txt2);font-style:italic">লেখা শুরু করুন…</p>';
-    btn.textContent = "✏️ Edit";
-  } else {
-    preview.style.display = "none";
-    textarea.style.display = "";
-    btn.textContent = "👁️ Preview";
-  }
+      : '<p class="md-preview-placeholder">Preview will appear here…</p>';
+  }, 250);
 };
 
 // ── CREATE POST ──
@@ -1911,13 +1905,9 @@ window.openCreatePost = () => {
   }
   const dd = document.getElementById("tagDropdown");
   if (dd) dd.style.display = "none";
-  // Reset markdown preview to edit mode
+  // Reset markdown preview
   const pv = document.getElementById("mdPreview");
-  const ta = document.getElementById("pbody");
-  const mb = document.getElementById("mdPreviewBtn");
-  if (pv) { pv.style.display = "none"; pv.innerHTML = ""; }
-  if (ta) ta.style.display = "";
-  if (mb) mb.textContent = "👁️ Preview";
+  if (pv) pv.innerHTML = '<p class="md-preview-placeholder">Preview will appear here…</p>';
   document.getElementById("createModal").style.display = "flex";
   _pushModal("createModal");
 };
