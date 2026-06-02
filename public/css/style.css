@@ -2536,7 +2536,7 @@
                 display: grid;
                 grid-template-columns: 2fr 1fr;
                 gap: 2px;
-                background: var(--bg);
+                background: rgba(255,255,255,0.03);
                 aspect-ratio: 4/3;
                 overflow: hidden;
                 border-radius: 0;
