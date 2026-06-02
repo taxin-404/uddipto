@@ -2350,7 +2350,7 @@
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
                 gap: 1rem;
-                align-items: stretch;
+                align-items: start;
             }
             @media (max-width: 900px) {
                 .grid {
@@ -2540,12 +2540,6 @@
                 aspect-ratio: 4/3;
                 overflow: hidden;
                 border-radius: 0;
-            }
-            .card-img-placeholder {
-                aspect-ratio: 4/3;
-                background: rgba(255,255,255,0.02);
-                border-top: 1px solid rgba(255,255,255,0.04);
-                border-bottom: 1px solid rgba(255,255,255,0.04);
             }
             .card-img-wrap.ci-single {
                 grid-template-columns: 1fr;
