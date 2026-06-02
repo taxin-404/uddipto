@@ -784,14 +784,11 @@ function stripMd(md) {
 function renderExcerpt(md, maxLen) {
   if (!md) return "";
   let s = md;
-  // strip block-level syntax
+  // strip block-level syntax (keep task/regular lists — handled later)
   s = s.replace(/```[\s\S]*?```/g, '');
   s = s.replace(/^#{1,6}\s+/gm, '');
   s = s.replace(/^(?:[-*_ ]{3,})\s*$/gm, '');
   s = s.replace(/^>\s?/gm, '');
-  s = s.replace(/^[\t ]*[-*+] \[[ xX]\]\s*/gm, '');
-  s = s.replace(/^[\t ]*[-*+]\s+/gm, '');
-  s = s.replace(/^[\t ]*\d+\.\s+/gm, '');
   s = s.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
   // truncate at word boundary
   s = s.trim();
@@ -809,6 +806,13 @@ function renderExcerpt(md, maxLen) {
   s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // task list checkbox
+  s = s.replace(/^[\t ]*[-*+] \[([ xX])\](.*)$/gm, (m, ch, txt) =>
+    '<span class="ex-task"><input type="checkbox" disabled' + (ch.trim() ? ' checked' : '') + '>' + txt.trim() + '</span>'
+  );
+  // strip remaining list markers
+  s = s.replace(/^[\t ]*[-*+]\s+/gm, '');
+  s = s.replace(/^[\t ]*\d+\.\s+/gm, '');
   return s;
 }
 

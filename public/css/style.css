@@ -2495,6 +2495,20 @@
                 line-height: 1.6;
                 margin-bottom: 0.35rem;
             }
+            .ex-task {
+                display: inline;
+            }
+            .ex-task input[type="checkbox"] {
+                display: inline-block;
+                width: 0.9em;
+                height: 0.9em;
+                margin: 0 0.2em 0 0;
+                accent-color: var(--amber3);
+                vertical-align: middle;
+                transform: translateY(-1px);
+                pointer-events: none;
+                cursor: default;
+            }
             .card-tags {
                 display: flex;
                 flex-wrap: wrap;
