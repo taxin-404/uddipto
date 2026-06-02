@@ -1962,8 +1962,8 @@ window.runSearch = () => {
           <span class="srch-item-stat"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> ${p.likeCount || 0}</span>
           <span class="srch-item-stat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> ${p.viewCount || 0}</span>
         </div>
-        <div class="srch-item-title">${esc(p.title || "Untitled")}</div>
-        ${excerpt ? `<div class="srch-item-excerpt">${excerpt}</div>` : ""}
+        <div class="srch-item-title${hasArabic(p.title || "") ? " arabic" : ""}"${hasArabic(p.title || "") ? ' dir="rtl"' : ""}>${esc(p.title || "Untitled")}</div>
+        ${excerpt ? `<div class="srch-item-excerpt${hasArabic(p.body || "") ? " arabic" : ""}"${hasArabic(p.body || "") ? ' dir="rtl"' : ""}>${excerpt}</div>` : ""}
         ${tagsHtml ? `<div class="srch-item-tags">${tagsHtml}</div>` : ""}
         <div class="srch-item-author">
           <img src="${esc(p.authorPhoto || "")}" onerror="this.style.display='none'"/>
