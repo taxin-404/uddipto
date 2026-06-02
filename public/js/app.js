@@ -997,6 +997,7 @@ window.openPost = async (id) => {
         <div class="pm-acts">
           <button class="pill ${liked ? "pla" : ""}" onclick="toggleLike('${id}',this)" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="${liked ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> Like ${p.likeCount || 0}</button>
           <button class="pill ${saved ? "psa" : ""}" onclick="toggleSave('${id}',this)" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="${saved ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg> Save</button>
+          <button class="pill" onclick="sharePost('${id}','${esc(p.title || "")}')" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg> Share</button>
           ${canDelete(p) ? `<button class="pill pill-del" onclick="deletePost('${id}');closeModal('postModal')" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg> মুছুন</button>` : ""}
           ${canPinPost() ? `<button class="pill pill-pin${isPinnedActive(p) ? " pill-pin-active pill-unpin" : ""}" data-pin-id="${id}" onclick="${isPinnedActive(p) ? `directUnpin('${id}')` : `openPinModal('${id}',false)`}" style="display:inline-flex;align-items:center;gap:.35rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="${isPinnedActive(p) ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg> ${isPinnedActive(p) ? "আনপিন করুন" : "পিন করুন"}</button>` : ""}
         </div>
@@ -1419,6 +1420,25 @@ window.toggleSave = async (id, btn) => {
     _saving.delete(id);
   }
 };
+window.sharePost = async (id, title) => {
+  const url = `${location.origin}${location.pathname}?post=${id}`;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, url });
+      return;
+    } catch (e) {
+      if (e.name !== "AbortError") toast("শেয়ার করা যায়নি", "error");
+      return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("লিংক কপি করা হয়েছে", "success");
+  } catch (e) {
+    toast("শেয়ার করা যায়নি", "error");
+  }
+};
+
 window.deletePost = async (id) => {
   if (!currentUser) {
     toast("লগইন করুন", "error");
