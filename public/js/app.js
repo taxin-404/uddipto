@@ -970,8 +970,10 @@ window.openPost = async (id) => {
   // Render body separately to ensure it works
   const pmBody = document.getElementById("pmBody");
   if (pmBody && p.body != null) {
-    const html = mdToHtml(p.body || "");
-    pmBody.innerHTML = html || '<em style="color:var(--txt2)">(no content)</em>';
+    const raw = p.body || "";
+    const html = mdToHtml(raw);
+    console.log("openPost body:", JSON.stringify(raw), "html:", html.substring(0,200));
+    pmBody.innerHTML = html;
   } else if (pmBody) {
     pmBody.remove();
   }
