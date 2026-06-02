@@ -11,20 +11,25 @@
 ### Key Features
 
 | Feature | Details |
-|---|---|
+|---|---|---|
 | **Tabs** | সাম্প্রতিক (Recent/This Month), কার্যক্রম (Activities), নির্দেশিকা (Guidelines) |
 | **Google Auth** | Sign in with Google via Firebase Authentication |
 | **Posts** | Create with title, body, tags, multi-image upload (max 10) |
+| **Markdown Body** | 16-feature inline markdown renderer (no CDN): bold, italic, code, headings, lists, task checkboxes, blockquotes, tables, links, images |
+| **Live Preview** | Debounced (250ms) markdown preview below the create-post textarea |
+| **Arabic Support** | RTL direction, Arabic font stack, auto-detection via Unicode range |
 | **Comments** | Threaded/reply system with pin support |
 | **Likes & Saves** | Optimistic UI updates, persisted per user |
 | **Search** | Full-text + phonetic Banglish→Bengali transliteration, filters by type/tag/month/sort |
 | **Pin System** | Pin posts with custom duration or unlimited |
 | **Image Lightbox** | Gallery viewer with prev/next navigation |
-| **Real-time** | Firestore `onSnapshot` listeners for live post/comment updates |
+| **Share** | Web Share API (mobile) with clipboard fallback; shareable `?post=ID` URLs |
+| **Real-time** | Firestore `onSnapshot` listeners for live post/comment updates (paused when tab hidden) |
 | **Infinite Scroll** | Pagination via `IntersectionObserver` |
+| **Lazy Images** | Card background-images load on scroll via IntersectionObserver (200px rootMargin) |
 | **Dark/Light Theme** | Persisted in localStorage, instant apply (no flash) |
 | **Reports** | Users report comments; admins review, dismiss, block users |
-| **Role-based Access** | 4 roles control all UI and Firestore operations |
+| **Role-based Access** | 5 roles control all UI and Firestore operations |
 
 ---
 
@@ -33,16 +38,16 @@
 ```
 uddipto/
 ├── build.sh              ← Build script: injects env vars into app.js placeholders
-├── .env.example          ← Template for Firebase + ImgBB credentials
-├── .gitignore            ← Excludes .env and AL project artifacts
+├── .gitignore            ← Excludes env and project artifacts
 ├── firestore.rules       ← Firestore security rules (deploy to Firebase!)
 ├── README.md             ← This file
 └── public/
     ├── index.html        ← Single-page HTML with all modals and UI structure
+    ├── favicon.png       ← Rounded PNG favicon (32×32, 16px radius)
     ├── css/
-    │   └── style.css     ← Full stylesheet with dark (default) + light themes
+    │   └── style.css     ← Full stylesheet with dark (default) + light themes (~5,300 lines)
     └── js/
-        └── app.js        ← All application logic (~3,540 lines, ES module)
+        └── app.js        ← All application logic (~3,770 lines, ES module)
 ```
 
 The project was originally a single 10k+ line file. It has been split into separate HTML, CSS, and JS files.
@@ -100,9 +105,10 @@ Page Load
   ├─→ Theme applied instantly (inline <script> in <head>)
   ├─→ loadPosts("recent") fires immediately (no auth wait)
   │     └─→ Fetches posts from Firestore
-  │     └─→ Renders cards to #postsGrid
-  │     └─→ Sets up IntersectionObserver for infinite scroll
-  │     └─→ Starts onSnapshot listener for real-time new posts
+  │     └─→ Renders cards to #postsGrid with lazy image loading
+  │     └─→ Sets up IntersectionObserver for infinite scroll + lazy images
+  │     └─→ Starts onSnapshot listener for real-time new posts (skips when tab hidden)
+  │     └─→ Checks ?post=ID in URL → opens shared post after 500ms
   │
   └─→ onAuthStateChanged fires separately
         ├─→ If logged in: fetch user doc → get role
@@ -194,6 +200,52 @@ Required indexes (Firestore Console → Indexes tab):
 
 ---
 
+## 📝 Markdown Support
+
+Post bodies are written in Markdown and rendered on the client with a self-contained `mdToHtml()` function — no external CDN or build step required.
+
+### Supported Features
+
+| Feature | Syntax | Example |
+|---|---|---|
+| Bold | `**text**` | **text** |
+| Italic | `*text*` | *text* |
+| Bold+Italic | `***text***` | ***text*** |
+| Strikethrough | `~~text~~` | ~~text~~ |
+| Inline Code | `` `code` `` | `code` |
+| Headings | `# H1` … `###### H6` | Heading |
+| Code Block | ```` ``````` | Monospace block |
+| Blockquote | `> text` | Indented quote |
+| Horizontal Rule | `---` | Thematic break |
+| Unordered List | `- item` | Bullet list |
+| Ordered List | `1. item` | Numbered list |
+| Task List | `- [x] done` | Checkable task |
+| Link | `[text](url)` | Hyperlink |
+| Image | `![alt](url)` | Embedded image |
+| Tables | `\| col \| col \|` | Grid table |
+| Line Break | Trailing `  ` | Soft line break |
+
+### Preview
+
+While creating or editing a post, a live HTML preview updates below the textarea (debounced at 250ms). A **Markdown Guide** tab in the profile modal lists all supported syntax.
+
+### Excerpts
+
+Card excerpts use `renderExcerpt()`, which strips block-level syntax (code blocks, headings, blockquotes, images) and truncates at word boundaries. Text-only cards get 400 chars; image cards get 120 chars.
+
+---
+
+## 🌐 Arabic / RTL Support
+
+Post titles, bodies, excerpts, and previews are automatically checked for Arabic text via `hasArabic()`, which tests Unicode ranges (U+0600–06FF, U+0750–077F, U+08A0–08FF, U+FB50–FDFF, U+FE70–FEFF).
+
+When Arabic content is detected:
+- The element receives `dir="rtl"`
+- The `.arabic` CSS class is applied
+- Font stack switches to `'Noto Naskh Arabic', 'Traditional Arabic', serif`
+
+This applies to: card titles, card excerpts, post modal titles, post modal body (rendered markdown), search results, and the markdown live preview.
+
 ## 🧭 Code Navigation
 
 ### `js/app.js` — Table of Contents
@@ -201,33 +253,37 @@ Required indexes (Firestore Console → Indexes tab):
 Open the file and use `Ctrl+G` to jump to any section:
 
 | Line | Section | Key Functions |
-|---|---|---|
+|---|---|---|---|
 | 1 | Firebase imports & config | `initializeApp`, `firebaseConfig` |
-| 53 | Shared variables | `currentUser`, `currentRole`, `allTags` |
-| 71 | Auth | `loginWithGoogle`, `logout`, `onAuthStateChanged`, role helpers |
-| 174 | Comment box close | `closeCbBox` |
-| 183 | Comment renderer | `renderCommentTree`, `_cmItemHtml` (Facebook-style threaded tree) |
-| 325 | Tags | `loadTags`, `saveTag` |
-| 350 | Infinite scroll | `_setupScrollObserver`, `_loadMorePosts`, `_appendPosts` |
-| 482 | Load posts | `loadPosts`, `renderPosts`, `cardHtml`, `tAgo`, `esc` |
-| 776 | Open post modal | `openPost` (full view with gallery) |
-| 862 | Floating comment box | `openComments`, `cbSetReply`, `cbPostComment` |
-| 988 | Comment actions | `togglePinComment`, `deleteComment`, `reportComment` |
-| 1056 | In-modal comments | `loadComments`, `cmSetReply`, `postComment` |
-| 1167 | Likes & saves | `toggleLike`, `toggleSave`, `deletePost` |
-| 1343 | Search | `filterByTag`, `openSearch`, `runSearch`, type/tag/sort filters |
-| 1516 | Phonetic search | Banglish→Bengali transliteration engine |
-| 1900 | Create post | `openCreatePost`, tag picker, `submitPost`, image upload |
-| 2367 | Drag & drop | Image drag-and-drop upload handler |
-| 2398 | Profile modal | `openProfile`, tab navigation |
-| 2602 | Saved posts tab | Loads and renders user's saved posts |
-| 2691 | My posts tab | Loads and renders user's own posts |
-| 2827 | Members tab | `loadMembers`, `setRole`, role assignment UI |
-| 2977 | Reports tab | `loadReports`, dismiss, delete, block user |
-| 3367 | Utilities | `closeModal`, `closeAllModals`, `toast`, `openLightbox` |
-| 3433 | Theme switcher | `toggleTheme`, `applyTheme` |
-| 3463 | History / back button | Browser history management for modals |
-| 3582 | Pin post | `openPinModal`, `confirmPinPost`, `directUnpin` |
+| 56 | Shared variables | `currentUser`, `currentRole`, `allTags` |
+| 74 | Auth | `loginWithGoogle`, `logout`, `onAuthStateChanged`, role helpers |
+| 177 | Comment box close | `closeCbBox` |
+| 186 | Comment renderer | `renderCommentTree`, `_cmItemHtml` (Facebook-style threaded tree) |
+| 328 | Tags | `loadTags`, `saveTag` |
+| 353 | Infinite scroll | `_setupScrollObserver`, `_loadMorePosts`, `_appendPosts` |
+| 485 | Markdown renderer | `mdToHtml()` (16-feature inline renderer, no CDN), `stripMd()`, `renderExcerpt()` |
+| 585 | Arabic detection | `hasArabic()` — Unicode range check, applies RTL + `.arabic` class |
+| 613 | Load posts | `loadPosts`, `renderPosts`, `cardHtml`, `tAgo`, `esc` |
+| 784 | Lazy images | `observeLazyImgs()` — IntersectionObserver swapping data-src on card images |
+| 840 | Share | `sharePost()` — Web Share API with clipboard fallback; `?post=ID` URL handler |
+| 872 | Open post modal | `openPost` (full view with body rendered via `mdToHtml()`, RTL support) |
+| 975 | Floating comment box | `openComments`, `cbSetReply`, `cbPostComment` |
+| 1103 | Comment actions | `togglePinComment`, `deleteComment`, `reportComment` |
+| 1171 | In-modal comments | `loadComments`, `cmSetReply`, `postComment` |
+| 1282 | Likes & saves | `toggleLike`, `toggleSave`, `deletePost` |
+| 1460 | Search | `filterByTag`, `openSearch`, `runSearch`, type/tag/sort filters, RTL excerpt |
+| 1633 | Phonetic search | Banglish→Bengali transliteration engine |
+| 2030 | Create post | `openCreatePost`, tag picker, `submitPost`, image upload, live markdown preview |
+| 2500 | Drag & drop | Image drag-and-drop upload handler |
+| 2535 | Profile modal | `openProfile`, tab navigation (now includes Markdown Guide tab `#tmd`) |
+| 2760 | Saved posts tab | Loads and renders user's saved posts |
+| 2870 | My posts tab | Loads and renders user's own posts |
+| 3010 | Members tab | `loadMembers`, `setRole`, role assignment UI |
+| 3180 | Reports tab | `loadReports`, dismiss, delete, block user |
+| 3580 | Utilities | `closeModal`, `closeAllModals`, `toast`, `openLightbox` |
+| 3660 | Theme switcher | `toggleTheme`, `applyTheme` |
+| 3700 | History / back button | Browser history management for modals |
+| 3775 | Pin post | `openPinModal`, `confirmPinPost`, `directUnpin` |
 
 ---
 
@@ -265,7 +321,7 @@ Open the file and use `Ctrl+G` to jump to any section:
 
 4. Deploy → Firebase → Authentication → Settings → **Authorized domains** → add your `.pages.dev` URL
 
-> 📋 See `.env.example` for a template. Copy it to `.env` for local development.
+> Environment variables are injected at deploy time by Cloudflare Pages. For local development, create your own `.env` file with the same 7 variables and run `source .env && ./build.sh`.
 
 ### Step 4 — Make Yourself Admin
 
@@ -278,18 +334,11 @@ Open the file and use `Ctrl+G` to jump to any section:
 
 ## 🛠️ Local Development
 
-Copy `.env.example` to `.env` and fill in your values, then run:
+Create a `.env` file with your 7 environment variables (use the same names as listed above), then run:
 
 ```bash
-# Option 1: Inject vars then serve
+# Inject vars then serve
 source .env && ./build.sh && cd public && python -m http.server 8080
-```
-
-```bash
-# Option 2: Manual replace then serve
-cp .env.example .env  # edit .env with your values
-source .env && ./build.sh
-cd public && npx serve .
 ```
 
 > Google login needs `http://localhost` — not `file://`. Add `localhost` to Firebase Auth → Authorized domains.
@@ -314,13 +363,14 @@ cd public && npx serve .
 ## ⚠️ Known Limitations
 
 | Limitation | Reason | Workaround |
-|---|---|---|
+|---|---|---|---|
 | Client-side type filtering | Avoids needing a composite Firestore index on `type + createdAt` | Fetches 3× PAGE_SIZE and filters in JS — acceptable for small datasets |
 | No server-side full-text search | Firestore doesn't support native full-text search | Phonetic search runs client-side on fetched posts; fine for ~hundreds of posts |
 | ImgBB rate limits | Free tier has upload limits | Consider upgrading or adding a CDN/cache layer |
 | No image optimization | Images served at full size from ImgBB | Thumbnails (`imageThumb`, `imageThumbs[]`) are used in the feed to save bandwidth |
-| Single JS bundle | All code in one `app.js` file | TOC at top of file + `Ctrl+G` for navigation; consider bundler for larger projects |
+| Single JS bundle | All code in one `app.js` file | TOC at top of this README + <kbd>Ctrl+G</kbd> for navigation; self-contained, no build step |
 | No offline write queue | Firestore cache is read-only for offline | Users see cached posts offline but can't create/edit without connection |
+| Markdown not sanitized | Post body rendered as HTML from admin-created content | Only admins/maintainers can create posts; no user-generated content from untrusted roles |
 
 ---
 
