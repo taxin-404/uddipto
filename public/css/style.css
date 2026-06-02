@@ -2350,7 +2350,7 @@
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
                 gap: 1rem;
-                align-items: stretch;
+                align-items: start;
             }
             @media (max-width: 900px) {
                 .grid {
@@ -2435,7 +2435,6 @@
                 padding: 0.85rem 0.9rem 0.5rem;
                 position: relative;
                 z-index: 1;
-                flex: 1;
             }
             .card-meta-row {
                 display: flex;

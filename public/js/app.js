@@ -898,7 +898,7 @@ function cardHtml(p) {
         </div>
       </div>
       <h3 class="card-title">${esc(p.title || "")}</h3>
-      ${hasText ? `<p class="card-excerpt">${renderExcerpt(p.body, 120)}</p>` : ""}
+      ${hasText ? `<p class="card-excerpt">${renderExcerpt(p.body, hasImgs ? 120 : 400)}</p>` : ""}
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ""}
     </div>
     ${imgBlock}
