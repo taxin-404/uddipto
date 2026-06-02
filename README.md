@@ -11,7 +11,7 @@
 ### Key Features
 
 | Feature | Details |
-|---|---|---|
+|---|---|
 | **Tabs** | সাম্প্রতিক (Recent/This Month), কার্যক্রম (Activities), নির্দেশিকা (Guidelines) |
 | **Google Auth** | Sign in with Google via Firebase Authentication |
 | **Posts** | Create with title, body, tags, multi-image upload (max 10) |
