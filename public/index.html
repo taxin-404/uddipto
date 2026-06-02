@@ -59,10 +59,7 @@
         <link rel="dns-prefetch" href="https://api.imgbb.com" />
         <link rel="dns-prefetch" href="https://i.ibb.co" />
 
-        <!-- ✅ FIX 6: Markdown parser loaded first (used by app.js for post rendering) -->
-        <script src="js/marked.min.js"></script>
-
-        <!-- ✅ FIX 7: app.js loaded as module — deferred by default, doesn't block render -->
+        <!-- ✅ FIX 6: app.js loaded as module — deferred by default, doesn't block render -->
         <script type="module" src="js/app.js"></script>
     </head>
     <body>

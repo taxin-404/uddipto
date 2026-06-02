@@ -712,11 +712,65 @@ function esc(s) {
 
 function mdToHtml(md) {
   if (!md) return "";
-  try {
-    return window.marked.parse(md);
-  } catch (e) {
-    return esc(md).replace(/\n/g, "<br/>");
-  }
+  let s = esc(md);
+  // code blocks
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // headings
+  s = s.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  s = s.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  s = s.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  s = s.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  s = s.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // horizontal rules
+  s = s.replace(/^(?:[-*_ ]{3,})\s*$/gm, '<hr>');
+  // bold+italic
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
+  // bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // italic
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/_(.+?)_/g, '<em>$1</em>');
+  // strikethrough
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  // images
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+  // links
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  // task lists — must go before regular list items
+  s = s.replace(/^[\t ]*[-*+] \[([ xX])\](.+)$/gm, (m, ch, txt) =>
+    '<li style="list-style:none"><input type="checkbox" disabled' +
+    (ch.trim() ? ' checked' : '') + '>' + txt.trim() + '</li>'
+  );
+  // unordered list items
+  s = s.replace(/^[\t ]*[-*+] (.+)$/gm, '<li>$1</li>');
+  // ordered list items
+  s = s.replace(/^[\t ]*\d+\. (.+)$/gm, '<li>$1</li>');
+  // wrap consecutive <li> in <ul> or <ol>
+  s = s.replace(/((?:<li[^>]*>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // blockquotes
+  s = s.replace(/^>\s?(.+)$/gm, '<blockquote><p>$1</p></blockquote>');
+  // paragraphs — wrap lines not in block elements
+  let inBlock = false;
+  s = s.split('\n').map(line => {
+    if (/^<(h[1-6]|ul|ol|li|pre|code|blockquote|hr|div|table)/.test(line) || /^<\/(ul|ol|pre|blockquote)/.test(line)) {
+      inBlock = /^<\/(ul|ol|pre|blockquote)>/.test(line) ? false : !/^<\/(h[1-6]|li)>/.test(line);
+      return line;
+    }
+    if (/^<\/(h[1-6]|li)>/.test(line)) { inBlock = false; return line; }
+    if (inBlock) return line;
+    line = line.trim();
+    if (!line) return '';
+    // double newlines = paragraph break
+    return '<p>' + line + '</p>';
+  }).join('\n');
+  // line breaks within paragraphs
+  s = s.replace(/  \n/g, '<br>\n');
+  return s;
 }
 
 function stripMd(md) {
