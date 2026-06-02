@@ -3084,17 +3084,25 @@
                 max-width: 640px;
             }
             .pm-img-single {
-                height: 290px;
-                background-size: cover;
-                background-position: center;
                 cursor: pointer;
                 position: relative;
                 overflow: hidden;
                 border-radius: 12px;
                 margin-top: 0.9rem;
-                transition: filter 0.2s;
+                display: inline-flex;
+                justify-content: center;
+                width: 100%;
+                background: var(--bg);
             }
-            .pm-img-single:hover {
+            .pm-img-single img {
+                max-width: 100%;
+                height: auto;
+                max-height: 540px;
+                object-fit: contain;
+                display: block;
+                border-radius: 12px;
+            }
+            .pm-img-single:hover img {
                 filter: brightness(1.08);
             }
             .pm-img-hover {

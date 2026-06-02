@@ -963,7 +963,7 @@ window.openPost = async (id) => {
   window._postImgs = allImgs;
   let imgHtml = "";
   if (allImgs.length === 1) {
-    imgHtml = `<div class="pm-img-single" onclick="openLightbox(0)" style="background-image:url('${esc(allThumbs[0] || allImgs[0])}')"><div class="pm-img-hover"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`;
+    imgHtml = `<div class="pm-img-single" onclick="openLightbox(0)"><img src="${esc(allImgs[0])}" alt=""><div class="pm-img-hover"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`;
   } else if (allImgs.length > 1) {
     imgHtml = `<div class="pm-gallery">${allImgs.map((u, i) => `<div class="pm-gimg" style="background-image:url('${esc(u)}')" onclick="openLightbox(${i})"><div class="pm-gimg-hover"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div></div>`).join("")}</div>`;
   }
