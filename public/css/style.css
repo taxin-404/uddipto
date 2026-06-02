@@ -3220,6 +3220,29 @@
             .md-body a:hover {
                 color: var(--aqua2);
             }
+            .md-body li input[type="checkbox"] {
+                display: inline-block;
+                width: 1em;
+                height: 1em;
+                margin: 0 0.35em 0 0;
+                accent-color: var(--amber3);
+                vertical-align: middle;
+                transform: translateY(-1px);
+                cursor: default;
+                pointer-events: none;
+            }
+            .md-body li:has(input[type="checkbox"]) {
+                list-style: none;
+            }
+            .md-body li {
+                list-style-position: outside;
+            }
+            .md-body ul li {
+                list-style-type: disc;
+            }
+            .md-body ol li {
+                list-style-type: decimal;
+            }
             .md-body img {
                 max-width: 100%;
                 border-radius: 8px;
