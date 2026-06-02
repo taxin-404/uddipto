@@ -59,7 +59,10 @@
         <link rel="dns-prefetch" href="https://api.imgbb.com" />
         <link rel="dns-prefetch" href="https://i.ibb.co" />
 
-        <!-- ✅ FIX 6: app.js loaded as module — deferred by default, doesn't block render -->
+        <!-- ✅ FIX 6: Markdown parser loaded first (used by app.js for post rendering) -->
+        <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/lib/marked.umd.min.js"></script>
+
+        <!-- ✅ FIX 7: app.js loaded as module — deferred by default, doesn't block render -->
         <script type="module" src="js/app.js"></script>
     </head>
     <body>
@@ -238,7 +241,18 @@
                     </select>
                 </div>
                 <div class="fg"><label>শিরোনাম · Title</label><input id="ptitle" placeholder="পোস্টের শিরোনাম…" /></div>
-                <div class="fg"><label>বিষয়বস্তু · Content (optional)</label><textarea id="pbody" placeholder="লিখুন…"></textarea></div>
+                <div class="fg">
+                  <label>বিষয়বস্তু · Content (optional)
+                    <span style="color:var(--txt2);font-weight:400;text-transform:none">
+                      — Markdown supported
+                    </span>
+                  </label>
+                  <div class="md-editor-row">
+                    <textarea id="pbody" placeholder="Markdown লিখুন…&#10;&#10;# শিরোনাম&#10;**বোল্ড** *ইটালিক*&#10;- লিস্ট&#10;`কোড`"></textarea>
+                    <button type="button" class="md-preview-btn" id="mdPreviewBtn" onclick="toggleMdPreview()" title="Preview">👁️ Preview</button>
+                  </div>
+                  <div id="mdPreview" class="md-preview-box md-body" style="display:none"></div>
+                </div>
                 <div class="fg">
                     <label>ট্যাগ · Tags <span style="color:var(--txt2);font-weight:400;text-transform:none">(max 5)</span></label>
                     <div class="tag-picker-wrap">

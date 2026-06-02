@@ -710,6 +710,23 @@ function esc(s) {
     .replace(/'/g, "&#39;");
 }
 
+function mdToHtml(md) {
+  if (!md) return "";
+  try {
+    return window.marked.parse(md);
+  } catch (e) {
+    return esc(md).replace(/\n/g, "<br/>");
+  }
+}
+
+function stripMd(md) {
+  if (!md) return "";
+  const html = mdToHtml(md);
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || "";
+}
+
 function renderPosts(posts) {
   const grid = document.getElementById("postsGrid");
   if (!posts.length) {
@@ -792,7 +809,7 @@ function cardHtml(p) {
         </div>
       </div>
       <h3 class="card-title">${esc(p.title || "")}</h3>
-      ${hasText ? `<p class="card-excerpt">${esc((p.body || "").slice(0, 120))}${(p.body || "").length > 120 ? "…" : ""}</p>` : ""}
+      ${hasText ? (() => { const pt = stripMd(p.body); return `<p class="card-excerpt">${esc(pt.slice(0, 120))}${pt.length > 120 ? "…" : ""}</p>`; })() : ""}
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ""}
     </div>
     ${imgBlock}
@@ -874,7 +891,7 @@ window.openPost = async (id) => {
           <span>${esc(p.authorName || "")}</span>
           <span class="pm-rb">${p.authorRole || "user"}</span>
         </div>
-        ${p.body ? `<div class="pm-txt">${esc(p.body).replace(/\n/g, "<br/>")}</div>` : ""}
+        ${p.body ? `<div class="pm-txt md-body">${mdToHtml(p.body)}</div>` : ""}
         ${tagsHtml ? `<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>` : ""}
         ${imgHtml}
         <div class="pm-acts">
@@ -1828,8 +1845,8 @@ window.runSearch = () => {
     .map((p) => {
       const typeLabel =
         { blog: "কার্যক্রম", guideline: "নির্দেশিকা" }[p.type] || "কার্যক্রম";
-      const excerpt =
-        (p.body || "").slice(0, 100) + (p.body?.length > 100 ? "…" : "");
+      const rawPlain = stripMd(p.body || "");
+      const excerpt = rawPlain.slice(0, 100) + (rawPlain.length > 100 ? "…" : "");
       const tagsHtml = (p.tags || [])
         .slice(0, 4)
         .map((t) => _tagHtml(t))
@@ -1857,6 +1874,26 @@ window.runSearch = () => {
     .join("");
 };
 
+// ── MARKDOWN PREVIEW ──
+window.toggleMdPreview = () => {
+  const textarea = document.getElementById("pbody");
+  const preview = document.getElementById("mdPreview");
+  const btn = document.getElementById("mdPreviewBtn");
+  if (!textarea || !preview || !btn) return;
+  if (preview.style.display === "none") {
+    preview.style.display = "block";
+    textarea.style.display = "none";
+    preview.innerHTML = textarea.value.trim()
+      ? mdToHtml(textarea.value)
+      : '<p style="color:var(--txt2);font-style:italic">লেখা শুরু করুন…</p>';
+    btn.textContent = "✏️ Edit";
+  } else {
+    preview.style.display = "none";
+    textarea.style.display = "";
+    btn.textContent = "👁️ Preview";
+  }
+};
+
 // ── CREATE POST ──
 window.openCreatePost = () => {
   if (!currentUser) {
@@ -1874,6 +1911,13 @@ window.openCreatePost = () => {
   }
   const dd = document.getElementById("tagDropdown");
   if (dd) dd.style.display = "none";
+  // Reset markdown preview to edit mode
+  const pv = document.getElementById("mdPreview");
+  const ta = document.getElementById("pbody");
+  const mb = document.getElementById("mdPreviewBtn");
+  if (pv) { pv.style.display = "none"; pv.innerHTML = ""; }
+  if (ta) ta.style.display = "";
+  if (mb) mb.textContent = "👁️ Preview";
   document.getElementById("createModal").style.display = "flex";
   _pushModal("createModal");
 };

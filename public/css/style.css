@@ -3169,7 +3169,106 @@
                 color: var(--txt);
                 line-height: 1.85;
                 font-size: 0.88rem;
-                white-space: pre-wrap;
+            }
+            .md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+                margin: 1em 0 0.5em;
+                line-height: 1.3;
+            }
+            .md-body h1 { font-size: 1.4rem; }
+            .md-body h2 { font-size: 1.2rem; }
+            .md-body h3 { font-size: 1.05rem; }
+            .md-body p { margin: 0.5em 0; }
+            .md-body ul, .md-body ol { padding-left: 1.5em; margin: 0.5em 0; }
+            .md-body li { margin: 0.25em 0; }
+            .md-body blockquote {
+                margin: 0.5em 0;
+                padding: 0.5em 1em;
+                border-left: 3px solid var(--amber3);
+                background: rgba(212, 163, 73, 0.08);
+                border-radius: 0 6px 6px 0;
+                color: var(--txt2);
+            }
+            .md-body code {
+                background: rgba(255,255,255,0.08);
+                padding: 0.15em 0.4em;
+                border-radius: 4px;
+                font-family: 'IBM Plex Mono', monospace;
+                font-size: 0.82em;
+            }
+            .md-body pre {
+                background: rgba(0,0,0,0.3);
+                padding: 0.8em 1em;
+                border-radius: 8px;
+                overflow-x: auto;
+                font-size: 0.82rem;
+                border: 1px solid var(--brd);
+            }
+            .md-body pre code {
+                background: none;
+                padding: 0;
+            }
+            .md-body a {
+                color: var(--aqua3);
+                text-decoration: underline;
+            }
+            .md-body a:hover {
+                color: var(--aqua2);
+            }
+            .md-body img {
+                max-width: 100%;
+                border-radius: 8px;
+                margin: 0.5em 0;
+            }
+            .md-body hr {
+                border: none;
+                border-top: 1px solid var(--brd);
+                margin: 1em 0;
+            }
+            .md-body table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 0.5em 0;
+                font-size: 0.85rem;
+            }
+            .md-body th, .md-body td {
+                border: 1px solid var(--brd);
+                padding: 0.4em 0.6em;
+                text-align: left;
+            }
+            .md-body th {
+                background: rgba(255,255,255,0.05);
+            }
+            .md-editor-row {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                gap: 0.35rem;
+            }
+            .md-editor-row textarea {
+                width: 100%;
+                min-height: 120px;
+            }
+            .md-preview-btn {
+                align-self: flex-end;
+                background: rgba(110,170,158,0.1);
+                border: 1px solid rgba(110,170,158,0.25);
+                color: var(--txt);
+                padding: 0.3rem 0.75rem;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 0.78rem;
+                font-family: inherit;
+                transition: var(--trans);
+            }
+            .md-preview-btn:hover {
+                background: rgba(110,170,158,0.2);
+            }
+            .md-preview-box {
+                border: 1px solid var(--brd);
+                border-radius: 8px;
+                padding: 0.8rem 1rem;
+                background: rgba(0,0,0,0.15);
+                min-height: 100px;
             }
             .pm-acts {
                 display: flex;
