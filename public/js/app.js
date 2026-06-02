@@ -789,9 +789,9 @@ function renderExcerpt(md, maxLen) {
   s = s.replace(/^#{1,6}\s+/gm, '');
   s = s.replace(/^(?:[-*_ ]{3,})\s*$/gm, '');
   s = s.replace(/^>\s?/gm, '');
+  s = s.replace(/^[\t ]*[-*+] \[[ xX]\]\s*/gm, '');
   s = s.replace(/^[\t ]*[-*+]\s+/gm, '');
   s = s.replace(/^[\t ]*\d+\.\s+/gm, '');
-  s = s.replace(/^[\t ]*[-*+] \[[ xX]\]\s*/gm, '');
   s = s.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
   // truncate at word boundary
   s = s.trim();
