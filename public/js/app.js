@@ -945,7 +945,7 @@ window.openPost = async (id) => {
           <span>${esc(p.authorName || "")}</span>
           <span class="pm-rb">${p.authorRole || "user"}</span>
         </div>
-        ${p.body ? `<div class="pm-txt md-body">${mdToHtml(p.body)}</div>` : ""}
+        ${p.body != null ? `<div class="pm-txt md-body" id="pmBody"></div>` : ""}
         ${tagsHtml ? `<div class="card-tags" style="margin-top:.75rem">${tagsHtml}</div>` : ""}
         ${imgHtml}
         <div class="pm-acts">
@@ -967,6 +967,14 @@ window.openPost = async (id) => {
         </div>
       </div>
     </div>`;
+  // Render body separately to ensure it works
+  const pmBody = document.getElementById("pmBody");
+  if (pmBody && p.body != null) {
+    const html = mdToHtml(p.body || "");
+    pmBody.innerHTML = html || '<em style="color:var(--txt2)">(no content)</em>';
+  } else if (pmBody) {
+    pmBody.remove();
+  }
   document.getElementById("postModal").style.display = "flex";
   _pushModal("postModal");
   loadComments(id);
