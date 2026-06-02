@@ -813,6 +813,9 @@ function renderExcerpt(md, maxLen) {
   // strip remaining list markers
   s = s.replace(/^[\t ]*[-*+]\s+/gm, '');
   s = s.replace(/^[\t ]*\d+\.\s+/gm, '');
+  // line breaks
+  s = s.replace(/\n\n+/g, '<br><br>');
+  s = s.replace(/\n/g, '<br>');
   return s;
 }
 
