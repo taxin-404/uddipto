@@ -1693,6 +1693,14 @@
             }
 
             /* big title */
+            .hero-title-wrap {
+                display: inline-block;
+                background: rgba(0,0,0,0.35);
+                backdrop-filter: blur(8px);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 24px;
+                padding: 0.6rem 1.8rem;
+            }
             .hero-title-top {
                 font-family: "Hind Siliguri", sans-serif;
                 font-size: clamp(3.8rem, 8vw, 6.5rem);
